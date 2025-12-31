@@ -1,0 +1,1235 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PDF全局对比工具（精准分页+文字汇总）</title>
+    <!-- 引入Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- 引入Font Awesome图标 -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- 引入PDF解析库 -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    <!-- 引入文本对比库 -->
+    <script src="https://cdn.jsdelivr.net/npm/diff-match-patch@1.0.5/index.min.js"></script>
+    
+    <style>
+        /* 核心样式 - 精准定位 */
+        .pdf-container {
+            position: relative;
+            width: 100%;
+            overflow: auto;
+            margin: 0 auto;
+            display: flex;
+            justify-content: center;
+        }
+        .pdf-page-wrapper {
+            position: relative;
+            display: inline-block;
+        }
+        .pdf-page {
+            display: block;
+            margin: 0 auto;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            border-radius: 4px;
+        }
+        .highlight-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            pointer-events: none;
+            z-index: 10;
+            transform-origin: top left;
+        }
+        .file-upload-btn {
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+        .file-upload-btn:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 2px 8px rgba(22, 93, 255, 0.2);
+        }
+        .file-input {
+            position: absolute;
+            opacity: 0;
+            width: 0;
+            height: 0;
+            z-index: -1;
+        }
+        /* 差异汇总样式 */
+        .diff-summary {
+            background: #f8fafc;
+            border-radius: 8px;
+            padding: 16px;
+            margin-bottom: 20px;
+            max-height: 400px;
+            overflow-y: auto;
+            border: 1px solid #e2e8f0;
+        }
+        .diff-item {
+            padding: 12px;
+            margin-bottom: 8px;
+            background: white;
+            border-radius: 6px;
+            border-left: 4px solid #3b82f6;
+        }
+        .diff-item-delete {
+            border-left-color: #ef4444;
+        }
+        .diff-item-add {
+            border-left-color: #22c55e;
+        }
+        .diff-label {
+            font-weight: 600;
+            color: #475569;
+            margin-right: 4px;
+        }
+    </style>
+</head>
+<body class="bg-gray-50 min-h-screen font-sans">
+    <div class="max-w-7xl mx-auto px-4 py-8">
+        <!-- 头部 -->
+        <header class="bg-white shadow-sm rounded-lg p-6 mb-8">
+            <div class="flex items-center justify-between">
+                <div class="flex items-center gap-3">
+                    <i class="fa-solid fa-file-pdf text-blue-600 text-3xl"></i>
+                    <h1 class="text-2xl font-bold text-gray-800">PDF全局对比工具</h1>
+                </div>
+                <p class="text-gray-500">精准分页 | 文字汇总 | 无偏差高亮</p>
+            </div>
+        </header>
+
+        <!-- 上传区域 -->
+        <section class="bg-white shadow-sm rounded-lg p-6 mb-8">
+            <h2 class="text-xl font-semibold text-gray-800 mb-6 flex items-center gap-2">
+                <i class="fa-solid fa-upload text-blue-600"></i>
+                上传PDF文件
+            </h2>
+            <div class="grid md:grid-cols-2 gap-8">
+                <!-- 原始文件 -->
+                <div class="border-2 border-dashed border-gray-200 rounded-lg p-6 hover:border-blue-500 transition-colors">
+                    <div class="text-center">
+                        <i class="fa-solid fa-file-pdf text-5xl text-gray-400 mb-4"></i>
+                        <h3 class="text-lg font-medium text-gray-700 mb-2">原始PDF文件</h3>
+                        <p class="text-gray-500 mb-6">作为对比基准的PDF文件</p>
+                        
+                        <div class="relative inline-block">
+                            <input type="file" accept=".pdf" id="original-file" class="file-input" />
+                            <label for="original-file" class="file-upload-btn bg-blue-600 text-white px-8 py-3 rounded-md hover:bg-blue-700 transition-colors flex items-center justify-center gap-2">
+                                <i class="fa-solid fa-file-pdf"></i>
+                                选择文件
+                            </label>
+                        </div>
+                        <p class="mt-4 text-sm text-gray-500" id="original-file-name">未选择文件</p>
+                        <p class="mt-2 text-xs text-gray-400" id="original-status"></p>
+                    </div>
+                </div>
+
+                <!-- 对比文件 -->
+                <div class="border-2 border-dashed border-gray-200 rounded-lg p-6 hover:border-blue-500 transition-colors">
+                    <div class="text-center">
+                        <i class="fa-solid fa-file-pdf text-5xl text-gray-400 mb-4"></i>
+                        <h3 class="text-lg font-medium text-gray-700 mb-2">对比PDF文件</h3>
+                        <p class="text-gray-500 mb-6">需要对比的修改版PDF文件</p>
+                        
+                        <div class="relative inline-block">
+                            <input type="file" accept=".pdf" id="compare-file" class="file-input" />
+                            <label for="compare-file" class="file-upload-btn bg-blue-600 text-white px-8 py-3 rounded-md hover:bg-blue-700 transition-colors flex items-center justify-center gap-2">
+                                <i class="fa-solid fa-file-pdf"></i>
+                                选择文件
+                            </label>
+                        </div>
+                        <p class="mt-4 text-sm text-gray-500" id="compare-file-name">未选择文件</p>
+                        <p class="mt-2 text-xs text-gray-400" id="compare-status"></p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="mt-8 text-center">
+                <button id="compare-btn" class="bg-green-600 text-white px-8 py-3 rounded-md hover:bg-green-700 transition-colors flex items-center justify-center gap-2 mx-auto disabled:bg-gray-400 disabled:cursor-not-allowed" disabled>
+                    <i class="fa-solid fa-code-compare"></i>
+                    开始精准对比
+                </button>
+            </div>
+        </section>
+
+        <!-- 加载状态 -->
+        <section id="loading-section" class="hidden bg-white shadow-sm rounded-lg p-6 mb-8 text-center">
+            <div class="inline-block animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mb-4"></div>
+            <p class="text-lg text-gray-800">正在全局解析PDF并检测差异...</p>
+            <p class="text-gray-500 mt-2">精准匹配分页，生成文字版差异汇总</p>
+        </section>
+
+        <!-- 对比结果 -->
+        <section id="result-section" class="hidden mb-8">
+            <!-- 差异概览 -->
+            <div class="bg-white shadow-sm rounded-lg p-6 mb-6">
+                <h3 class="text-lg font-semibold text-gray-800 mb-4">
+                    <i class="fa-solid fa-chart-simple text-blue-600 mr-2"></i>差异概览
+                </h3>
+                <div class="grid md:grid-cols-3 gap-4">
+                    <div class="bg-gray-50 rounded-lg p-4">
+                        <p class="text-gray-500 text-sm">总差异数</p>
+                        <p class="text-2xl font-bold text-gray-800" id="total-diffs">0</p>
+                    </div>
+                    <div class="bg-red-50 rounded-lg p-4">
+                        <p class="text-red-500 text-sm">删除内容</p>
+                        <p class="text-2xl font-bold text-red-600" id="delete-diffs">0</p>
+                    </div>
+                    <div class="bg-green-50 rounded-lg p-4">
+                        <p class="text-green-500 text-sm">新增内容</p>
+                        <p class="text-2xl font-bold text-green-600" id="add-diffs">0</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 文字版差异汇总（核心新增） -->
+            <div class="bg-white shadow-sm rounded-lg p-6 mb-6">
+                <h3 class="text-lg font-semibold text-gray-800 mb-4">
+                    <i class="fa-solid fa-list-check text-blue-600 mr-2"></i>文字版差异汇总
+                </h3>
+                <div id="diff-summary-container" class="diff-summary">
+                    <!-- 差异汇总内容将动态生成 -->
+                    <div class="text-gray-500 text-center py-8">暂无差异数据</div>
+                </div>
+            </div>
+
+            <!-- 控制栏 -->
+            <div class="bg-white shadow-sm rounded-lg p-4 mb-6 flex flex-wrap justify-between items-center gap-4">
+                <!-- 分页控制 -->
+                <div class="flex items-center gap-3">
+                    <button id="prev-btn" class="px-4 py-2 bg-gray-100 hover:bg-gray-200 rounded-md disabled:bg-gray-200 disabled:text-gray-400 disabled:cursor-not-allowed" disabled>
+                        <i class="fa-solid fa-chevron-left"></i> 上一页
+                    </button>
+                    <span id="page-info" class="text-gray-700 font-medium">第 1 页 / 共 0 页</span>
+                    <button id="next-btn" class="px-4 py-2 bg-gray-100 hover:bg-gray-200 rounded-md disabled:bg-gray-200 disabled:text-gray-400 disabled:cursor-not-allowed" disabled>
+                        下一页 <i class="fa-solid fa-chevron-right"></i>
+                    </button>
+                </div>
+
+                <!-- 缩放控制 -->
+                <div class="flex items-center gap-3">
+                    <span class="text-gray-700">缩放：</span>
+                    <button id="zoom-out" class="px-3 py-1 bg-gray-100 hover:bg-gray-200 rounded-md">
+                        <i class="fa-solid fa-minus"></i>
+                    </button>
+                    <span id="zoom-level" class="text-gray-700 font-medium">100%</span>
+                    <button id="zoom-in" class="px-3 py-1 bg-gray-100 hover:bg-gray-200 rounded-md">
+                        <i class="fa-solid fa-plus"></i>
+                    </button>
+                </div>
+            </div>
+
+            <!-- 图例说明 -->
+            <div class="bg-white shadow-sm rounded-lg p-4 mb-6">
+                <div class="flex flex-wrap gap-6">
+                    <div class="flex items-center gap-2">
+                        <div class="w-5 h-5 bg-red-500/30 border-2 border-red-500 rounded"></div>
+                        <span class="text-red-600 font-medium">原始文件删除内容（精准分页标注）</span>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <div class="w-5 h-5 bg-green-500/30 border-2 border-green-500 rounded"></div>
+                        <span class="text-green-600 font-medium">对比文件新增内容（精准分页标注）</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- PDF对比视图 -->
+            <div class="grid md:grid-cols-2 gap-8">
+                <!-- 原始PDF -->
+                <div class="bg-white shadow-sm rounded-lg p-6">
+                    <h3 class="text-lg font-medium text-gray-800 mb-4 text-center">原始PDF文件</h3>
+                    <div id="original-pdf-container" class="pdf-container bg-gray-100 p-4 rounded-lg">
+                        <!-- PDF内容 -->
+                    </div>
+                </div>
+
+                <!-- 对比PDF -->
+                <div class="bg-white shadow-sm rounded-lg p-6">
+                    <h3 class="text-lg font-medium text-gray-800 mb-4 text-center">对比PDF文件</h3>
+                    <div id="compare-pdf-container" class="pdf-container bg-gray-100 p-4 rounded-lg">
+                        <!-- PDF内容 -->
+                    </div>
+                </div>
+            </div>
+        </section>
+    </div>
+
+    <footer class="bg-white shadow-sm rounded-lg p-6 mt-8 text-center text-gray-500">
+        <p>© 2025 PDF精准对比工具 | 精准分页 | 文字汇总 | 无偏差标注</p>
+    </footer>
+
+    <script>
+        // 核心配置
+        const CONFIG = {
+            ZOOM_STEP: 0.1,
+            MAX_ZOOM: 2.0,
+            MIN_ZOOM: 0.5,
+            HIGHLIGHT_EXPAND: 3,
+            TEXT_HEIGHT: 16,
+            MATCH_THRESHOLD: 0.98,
+            MIN_DIFF_LENGTH: 1,
+            LABEL_OFFSET: 5,
+            LABEL_PADDING: 4
+        };
+
+        // 全局状态
+        const state = {
+            originalPdf: null,
+            comparePdf: null,
+            
+            // 完整文档数据（含精准分页信息）
+            originalDoc: {
+                fullText: '',
+                pages: [],             // 每页数据包含pageNum
+                blockIndex: new Map(), // 索引包含页码信息
+                blockPageMap: new Map()// 文本块到页码的映射
+            },
+            compareDoc: {
+                fullText: '',
+                pages: [],
+                blockIndex: new Map(),
+                blockPageMap: new Map()
+            },
+            
+            currentPage: 1,
+            zoomLevel: 1.0,
+            maxPages: 0,
+            
+            // 差异数据（精准分页）
+            globalDiffs: [],          // 包含完整的分页信息
+            pageDiffMap: new Map(),
+            totalDiffs: 0,
+            deleteDiffs: 0,
+            addDiffs: 0,
+            
+            // 文字版差异汇总
+            diffSummary: [],          // 结构化的差异汇总数据
+            
+            originalLoaded: false,
+            compareLoaded: false
+        };
+
+        // PDFJS初始化
+        if (typeof pdfjsLib !== 'undefined') {
+            pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+        }
+
+        // 页面加载完成初始化
+        document.addEventListener('DOMContentLoaded', () => {
+            initEventListeners();
+            initControls();
+        });
+
+        /**
+         * 初始化事件监听
+         */
+        function initEventListeners() {
+            document.getElementById('original-file').addEventListener('change', (e) => handleFileUpload(e, 'original'));
+            document.getElementById('compare-file').addEventListener('change', (e) => handleFileUpload(e, 'compare'));
+            document.getElementById('compare-btn').addEventListener('click', startGlobalComparison);
+            
+            // 文件按钮点击保障
+            document.querySelectorAll('.file-upload-btn').forEach(btn => {
+                btn.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    const input = document.getElementById(btn.getAttribute('for'));
+                    if (input) input.click();
+                });
+            });
+        }
+
+        /**
+         * 初始化控制按钮
+         */
+        function initControls() {
+            // 分页控制
+            document.getElementById('prev-btn').addEventListener('click', () => {
+                if (state.currentPage > 1) {
+                    state.currentPage--;
+                    updatePageDisplay();
+                    renderCurrentPage();
+                }
+            });
+
+            document.getElementById('next-btn').addEventListener('click', () => {
+                if (state.currentPage < state.maxPages) {
+                    state.currentPage++;
+                    updatePageDisplay();
+                    renderCurrentPage();
+                }
+            });
+
+            // 缩放控制
+            document.getElementById('zoom-in').addEventListener('click', () => {
+                if (state.zoomLevel < CONFIG.MAX_ZOOM) {
+                    state.zoomLevel = parseFloat((state.zoomLevel + CONFIG.ZOOM_STEP).toFixed(1));
+                    updateZoomDisplay();
+                    renderCurrentPage();
+                }
+            });
+
+            document.getElementById('zoom-out').addEventListener('click', () => {
+                if (state.zoomLevel > CONFIG.MIN_ZOOM) {
+                    state.zoomLevel = parseFloat((state.zoomLevel - CONFIG.ZOOM_STEP).toFixed(1));
+                    updateZoomDisplay();
+                    renderCurrentPage();
+                }
+            });
+        }
+
+        /**
+         * 处理文件上传
+         */
+        async function handleFileUpload(e, type) {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            if (!file.type.includes('pdf') && !file.name.toLowerCase().endsWith('.pdf')) {
+                alert('请选择有效的PDF文件！');
+                e.target.value = '';
+                return;
+            }
+
+            // 更新文件名显示
+            const nameElement = document.getElementById(`${type}-file-name`);
+            nameElement.textContent = file.name;
+            nameElement.classList.add('text-blue-600', 'font-medium');
+            
+            const statusElement = document.getElementById(`${type}-status`);
+            statusElement.textContent = `正在解析${type === 'original' ? '原始' : '对比'}PDF...`;
+            statusElement.classList.add('text-blue-600');
+
+            try {
+                const arrayBuffer = await readFileAsArrayBuffer(file);
+                await parsePdfDocument(arrayBuffer, type);
+
+                const doc = state[`${type}Doc`];
+                statusElement.textContent = `解析完成（${doc.pages.length}页，精准提取${doc.pages.reduce((sum, p) => sum + p.blocks.length, 0)}个文本块）`;
+                statusElement.classList.remove('text-blue-600');
+                statusElement.classList.add('text-green-600');
+
+                state[`${type}Loaded`] = true;
+                updateCompareButton();
+
+            } catch (error) {
+                console.error(`${type} PDF解析失败:`, error);
+                statusElement.textContent = '解析失败：' + error.message;
+                statusElement.classList.remove('text-blue-600');
+                statusElement.classList.add('text-red-600');
+                state[`${type}Loaded`] = false;
+                updateCompareButton();
+            }
+        }
+
+        /**
+         * 读取文件为ArrayBuffer
+         */
+        function readFileAsArrayBuffer(file) {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = (e) => resolve(e.target.result);
+                reader.onerror = (e) => reject(new Error('文件读取失败'));
+                reader.readAsArrayBuffer(file);
+            });
+        }
+
+        /**
+         * 解析PDF文档（核心：精准分页+文本块映射）
+         */
+        async function parsePdfDocument(arrayBuffer, type) {
+            const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+            state[`${type}Pdf`] = pdf;
+            
+            const doc = state[`${type}Doc`];
+            doc.fullText = '';
+            doc.pages = [];
+            doc.blockIndex.clear();
+            doc.blockPageMap.clear();
+            
+            const pageCount = pdf.numPages;
+
+            // 逐页精准解析（保留原始页码）
+            for (let pageNum = 1; pageNum <= pageCount; pageNum++) {
+                const page = await pdf.getPage(pageNum);
+                const originalViewport = page.getViewport({ scale: 1.0 });
+                const textContent = await page.getTextContent();
+                
+                const blocks = [];
+                let pageText = '';
+                
+                // 精准提取每个文本块的坐标和页码
+                textContent.items.forEach((item, idx) => {
+                    const [scaleX, , , scaleY, translateX, translateY] = item.transform;
+                    
+                    const textWidth = item.width || (item.str.length * scaleX * 8);
+                    const textHeight = item.height || (CONFIG.TEXT_HEIGHT * scaleY);
+                    
+                    // 精准坐标转换
+                    const canvasX = translateX;
+                    const canvasY = originalViewport.height - translateY - textHeight;
+                    
+                    const block = {
+                        text: item.str,
+                        x: canvasX,
+                        y: canvasY,
+                        width: textWidth,
+                        height: textHeight,
+                        transform: item.transform,
+                        viewport: {
+                            width: originalViewport.width,
+                            height: originalViewport.height,
+                            scale: 1.0
+                        },
+                        pageNum: pageNum, // 保留原始页码
+                        index: idx
+                    };
+                    
+                    blocks.push(block);
+                    pageText += item.str;
+                    
+                    // 建立精准索引（包含页码）
+                    const key = item.str.trim();
+                    if (key && key.length >= CONFIG.MIN_DIFF_LENGTH) {
+                        // 主索引：文本 -> 位置信息
+                        doc.blockIndex.set(key, { 
+                            pageNum: pageNum, 
+                            block: block 
+                        });
+                        // 页码映射：文本 -> 页码
+                        doc.blockPageMap.set(key, pageNum);
+                        
+                        // 子字符串索引（提高匹配率）
+                        if (key.length > 2) {
+                            for (let i = 0; i < key.length - 1; i++) {
+                                const subKey = key.substr(i, 2);
+                                if (!doc.blockIndex.has(subKey)) {
+                                    doc.blockIndex.set(subKey, { 
+                                        pageNum: pageNum, 
+                                        block: block 
+                                    });
+                                }
+                            }
+                        }
+                    }
+                });
+                
+                doc.fullText += pageText + '\n';
+                
+                // 存储页面完整数据（含页码）
+                doc.pages.push({
+                    text: pageText,
+                    blocks: blocks,
+                    width: originalViewport.width,
+                    height: originalViewport.height,
+                    pageNum: pageNum, // 关键：保留页码
+                    viewport: originalViewport
+                });
+                
+                console.log(`${type} 第${pageNum}页: 文本块=${blocks.length}, 页码=${pageNum}`);
+            }
+
+            console.log(`${type} PDF解析完成: 总页数=${pageCount}, 文本块索引数=${doc.blockIndex.size}`);
+        }
+
+        /**
+         * 更新对比按钮状态
+         */
+        function updateCompareButton() {
+            const btn = document.getElementById('compare-btn');
+            btn.disabled = !state.originalLoaded || !state.compareLoaded;
+            btn.title = btn.disabled ? '请先上传并解析两个PDF文件' : '';
+        }
+
+        /**
+         * 开始全局对比（核心：精准分页+生成文字汇总）
+         */
+        async function startGlobalComparison() {
+            try {
+                document.getElementById('loading-section').classList.remove('hidden');
+                document.getElementById('result-section').classList.add('hidden');
+
+                // 重置所有状态
+                state.globalDiffs = [];
+                state.pageDiffMap.clear();
+                state.diffSummary = [];
+                state.totalDiffs = 0;
+                state.deleteDiffs = 0;
+                state.addDiffs = 0;
+
+                // 全局文本对比
+                const dmp = new diff_match_patch();
+                const rawDiffs = dmp.diff_main(state.originalDoc.fullText, state.compareDoc.fullText);
+                dmp.diff_cleanupSemantic(rawDiffs);
+                dmp.diff_cleanupEfficiency(rawDiffs);
+
+                // 精准分析差异（含分页）
+                await analyzeGlobalDiffs(rawDiffs);
+
+                // 按页组织差异（确保分页正确）
+                organizeDiffsByPage();
+
+                // 生成文字版差异汇总（核心新增）
+                generateDiffSummary();
+
+                // 更新统计
+                updateDiffStatistics();
+
+                // 更新差异汇总UI
+                renderDiffSummary();
+
+                // 设置最大页数（取两个文档的最大页数）
+                state.maxPages = Math.max(
+                    state.originalDoc.pages.length,
+                    state.compareDoc.pages.length
+                );
+                state.currentPage = 1;
+
+                // 更新UI
+                updatePageDisplay();
+                updateZoomDisplay();
+                renderCurrentPage();
+                
+                document.getElementById('loading-section').classList.add('hidden');
+                document.getElementById('result-section').classList.remove('hidden');
+
+            } catch (error) {
+                console.error('全局对比失败:', error);
+                alert('对比失败：' + error.message);
+                document.getElementById('loading-section').classList.add('hidden');
+            }
+        }
+
+        /**
+         * 分析全局差异（精准分页）
+         */
+        async function analyzeGlobalDiffs(rawDiffs) {
+            // 先收集所有真正的差异
+            const realDiffs = [];
+            
+            for (const [diffType, diffText] of rawDiffs) {
+                const cleanText = diffText.trim();
+                if (!cleanText || cleanText.length < CONFIG.MIN_DIFF_LENGTH) continue;
+
+                // 类型 -1：原始文件删除内容
+                if (diffType === -1) {
+                    const isReallyDeleted = !isTextExistsInDocument(cleanText, state.compareDoc);
+                    
+                    if (isReallyDeleted) {
+                        // 精准查找删除内容的原始位置和页码
+                        const positions = findTextPositions(cleanText, state.originalDoc);
+                        const originalPageNum = positions.length > 0 ? positions[0].pageNum : '未知';
+                        
+                        realDiffs.push({
+                            type: 'delete',
+                            originalText: cleanText,
+                            originalPageNum: originalPageNum,
+                            compareText: `删除${cleanText}`,
+                            comparePageNum: '无',
+                            positions: positions,
+                            isReal: true
+                        });
+                        
+                        state.deleteDiffs++;
+                    }
+                }
+                // 类型 1：对比文件新增内容
+                else if (diffType === 1) {
+                    const isReallyAdded = !isTextExistsInDocument(cleanText, state.originalDoc);
+                    
+                    if (isReallyAdded) {
+                        // 精准查找新增内容的位置和页码
+                        const positions = findTextPositions(cleanText, state.compareDoc);
+                        const comparePageNum = positions.length > 0 ? positions[0].pageNum : '未知';
+                        
+                        realDiffs.push({
+                            type: 'add',
+                            originalText: '无',
+                            originalPageNum: '无',
+                            compareText: `新增${cleanText}`,
+                            comparePageNum: comparePageNum,
+                            positions: positions,
+                            isReal: true
+                        });
+                        
+                        state.addDiffs++;
+                    }
+                }
+            }
+            
+            // 合并相关差异（如删除0.1同时新增0.3）
+            state.globalDiffs = mergeRelatedDiffs(realDiffs);
+            state.totalDiffs = state.globalDiffs.length;
+        }
+
+        /**
+         * 合并相关差异（核心：处理删除+新增的组合差异）
+         */
+        function mergeRelatedDiffs(realDiffs) {
+            const mergedDiffs = [];
+            const deleteDiffs = realDiffs.filter(d => d.type === 'delete');
+            const addDiffs = realDiffs.filter(d => d.type === 'add');
+            
+            // 先处理独立的删除差异
+            for (const delDiff of deleteDiffs) {
+                // 查找是否有对应的新增差异（数值替换）
+                const relatedAddDiff = findRelatedAddDiff(delDiff, addDiffs);
+                
+                if (relatedAddDiff) {
+                    // 合并为替换差异
+                    mergedDiffs.push({
+                        type: 'replace',
+                        originalText: delDiff.originalText,
+                        originalPageNum: delDiff.originalPageNum,
+                        compareText: `${delDiff.compareText}，${relatedAddDiff.compareText}`,
+                        comparePageNum: relatedAddDiff.comparePageNum,
+                        deletePositions: delDiff.positions,
+                        addPositions: relatedAddDiff.positions,
+                        isReal: true
+                    });
+                    
+                    // 从addDiffs中移除已合并的差异
+                    const index = addDiffs.findIndex(d => d.compareText === relatedAddDiff.compareText);
+                    if (index !== -1) addDiffs.splice(index, 1);
+                } else {
+                    // 独立删除差异
+                    mergedDiffs.push({
+                        type: 'delete',
+                        originalText: delDiff.originalText,
+                        originalPageNum: delDiff.originalPageNum,
+                        compareText: delDiff.compareText,
+                        comparePageNum: delDiff.comparePageNum,
+                        positions: delDiff.positions,
+                        isReal: true
+                    });
+                }
+            }
+            
+            // 添加剩余的独立新增差异
+            mergedDiffs.push(...addDiffs);
+            
+            return mergedDiffs;
+        }
+
+        /**
+         * 查找相关的新增差异（如删除0.1对应新增0.3）
+         */
+        function findRelatedAddDiff(deleteDiff, addDiffs) {
+            // 简单数值替换匹配（可根据需求扩展）
+            const deleteValue = extractNumericValue(deleteDiff.originalText);
+            if (!deleteValue) return null;
+            
+            for (const addDiff of addDiffs) {
+                const addValue = extractNumericValue(addDiff.compareText.replace('新增', ''));
+                if (addValue && addValue !== deleteValue) {
+                    return addDiff;
+                }
+            }
+            
+            return null;
+        }
+
+        /**
+         * 提取文本中的数值
+         */
+        function extractNumericValue(text) {
+            const match = text.match(/\d+(\.\d+)?/);
+            return match ? match[0] : null;
+        }
+
+        /**
+         * 检查文本是否存在于文档中
+         */
+        function isTextExistsInDocument(text, doc) {
+            if (doc.fullText.includes(text)) return true;
+            
+            const cleanText = text.replace(/\s+/g, '').replace(/[.,;:\(\)]/g, '');
+            if (cleanText.length < 2) return false;
+            
+            const cleanDocText = doc.fullText.replace(/\s+/g, '').replace(/[.,;:\(\)]/g, '');
+            return cleanDocText.includes(cleanText);
+        }
+
+        /**
+         * 精准查找文本位置（保留原始页码）
+         */
+        function findTextPositions(text, doc) {
+            const positions = [];
+            
+            // 1. 精确索引匹配（优先）
+            const indexMatch = doc.blockIndex.get(text);
+            if (indexMatch) {
+                positions.push({
+                    pageNum: indexMatch.pageNum, // 保留原始页码
+                    x: indexMatch.block.x,
+                    y: indexMatch.block.y,
+                    width: indexMatch.block.width,
+                    height: indexMatch.block.height,
+                    text: text,
+                    exactMatch: true
+                });
+                console.log(`精准匹配: "${text}" → 页码${indexMatch.pageNum}, 坐标(${indexMatch.block.x},${indexMatch.block.y})`);
+                return positions;
+            }
+            
+            // 2. 逐页精准匹配（确保页码正确）
+            for (const page of doc.pages) {
+                if (page.text.includes(text)) {
+                    for (const block of page.blocks) {
+                        if (block.text.includes(text)) {
+                            const textIndex = block.text.indexOf(text);
+                            const relativeX = textIndex * 8;
+                            
+                            positions.push({
+                                pageNum: page.pageNum, // 使用页面的真实页码
+                                x: block.x + relativeX,
+                                y: block.y,
+                                width: text.length * 8,
+                                height: block.height,
+                                text: text,
+                                exactMatch: false
+                            });
+                            console.log(`页面匹配: "${text}" → 页码${page.pageNum}, 坐标(${block.x + relativeX},${block.y})`);
+                            break;
+                        }
+                    }
+                    if (positions.length > 0) break;
+                }
+            }
+            
+            // 3. 兜底方案（仅当完全找不到时使用）
+            if (positions.length === 0) {
+                // 查找包含该文本的页面（而非默认第一页）
+                let targetPageNum = 1;
+                for (const page of doc.pages) {
+                    if (page.text.includes(text)) {
+                        targetPageNum = page.pageNum;
+                        break;
+                    }
+                }
+                
+                positions.push({
+                    pageNum: targetPageNum, // 使用实际包含文本的页码
+                    x: 100,
+                    y: 100,
+                    width: text.length * 8 + CONFIG.HIGHLIGHT_EXPAND * 2,
+                    height: CONFIG.TEXT_HEIGHT + CONFIG.HIGHLIGHT_EXPAND * 2,
+                    text: text,
+                    exactMatch: false
+                });
+                console.log(`兜底匹配: "${text}" → 页码${targetPageNum}, 坐标(100,100)`);
+            }
+            
+            return positions;
+        }
+
+        /**
+         * 按页组织差异（确保分页正确）
+         */
+        function organizeDiffsByPage() {
+            state.pageDiffMap.clear();
+            
+            // 初始化所有页面
+            const maxPages = Math.max(
+                state.originalDoc.pages.length,
+                state.compareDoc.pages.length
+            );
+            for (let pageNum = 1; pageNum <= maxPages; pageNum++) {
+                state.pageDiffMap.set(pageNum, {
+                    original: [], // 原始文件当前页的差异
+                    compare: []   // 对比文件当前页的差异
+                });
+            }
+            
+            // 分配差异到对应页面
+            for (const diff of state.globalDiffs) {
+                if (diff.type === 'delete' || diff.type === 'replace') {
+                    // 删除/替换差异 - 分配到原始文件对应页码
+                    const positions = diff.deletePositions || diff.positions;
+                    for (const pos of positions) {
+                        const pageDiffs = state.pageDiffMap.get(pos.pageNum);
+                        if (pageDiffs) {
+                            pageDiffs.original.push({
+                                type: 'delete',
+                                text: diff.originalText,
+                                x: pos.x,
+                                y: pos.y,
+                                width: pos.width,
+                                height: pos.height,
+                                exactMatch: pos.exactMatch
+                            });
+                        }
+                    }
+                }
+                
+                if (diff.type === 'add' || diff.type === 'replace') {
+                    // 新增/替换差异 - 分配到对比文件对应页码
+                    const positions = diff.addPositions || diff.positions;
+                    for (const pos of positions) {
+                        const pageDiffs = state.pageDiffMap.get(pos.pageNum);
+                        if (pageDiffs) {
+                            pageDiffs.compare.push({
+                                type: 'add',
+                                text: diff.compareText.replace('删除', '').replace('新增', '').replace('，', ''),
+                                x: pos.x,
+                                y: pos.y,
+                                width: pos.width,
+                                height: pos.height,
+                                exactMatch: pos.exactMatch
+                            });
+                        }
+                    }
+                }
+            }
+            
+            console.log('差异分页完成:', state.pageDiffMap);
+        }
+
+        /**
+         * 生成文字版差异汇总（核心：按指定格式）
+         */
+        function generateDiffSummary() {
+            state.diffSummary = [];
+            
+            for (const diff of state.globalDiffs) {
+                // 格式化页码（p1/p2/p3...）
+                const formatPageNum = (num) => {
+                    if (num === '无' || num === '未知') return num;
+                    return `p${num}`;
+                };
+                
+                // 构建汇总项（严格按照示例格式）
+                const summaryItem = {
+                    originalDesc: diff.originalText || '无',
+                    originalPage: formatPageNum(diff.originalPageNum),
+                    compareDesc: diff.compareText || '无',
+                    comparePage: formatPageNum(diff.comparePageNum),
+                    type: diff.type
+                };
+                
+                state.diffSummary.push(summaryItem);
+                
+                console.log('差异汇总项:', summaryItem);
+            }
+        }
+
+        /**
+         * 渲染文字版差异汇总UI
+         */
+        function renderDiffSummary() {
+            const container = document.getElementById('diff-summary-container');
+            
+            if (state.diffSummary.length === 0) {
+                container.innerHTML = '<div class="text-gray-500 text-center py-8">未检测到实质性差异（仅分页变化不计入）</div>';
+                return;
+            }
+            
+            // 生成汇总HTML
+            let summaryHtml = '';
+            state.diffSummary.forEach((item, index) => {
+                const itemClass = item.type === 'delete' ? 'diff-item-delete' : 
+                                 item.type === 'add' ? 'diff-item-add' : 'diff-item';
+                
+                summaryHtml += `
+                    <div class="diff-item ${itemClass}">
+                        <div class="mb-2">
+                            <span class="diff-label">原文档描述：</span>
+                            ${item.originalDesc}
+                        </div>
+                        <div class="mb-2">
+                            <span class="diff-label">原文档页数：</span>
+                            ${item.originalPage}
+                        </div>
+                        <div class="mb-2">
+                            <span class="diff-label">新文档描述：</span>
+                            ${item.compareDesc}
+                        </div>
+                        <div>
+                            <span class="diff-label">新文档页数：</span>
+                            ${item.comparePage}
+                        </div>
+                    </div>
+                `;
+            });
+            
+            container.innerHTML = summaryHtml;
+        }
+
+        /**
+         * 更新差异统计
+         */
+        function updateDiffStatistics() {
+            document.getElementById('total-diffs').textContent = state.totalDiffs;
+            document.getElementById('delete-diffs').textContent = state.deleteDiffs;
+            document.getElementById('add-diffs').textContent = state.addDiffs;
+        }
+
+        /**
+         * 渲染当前页（精准分页匹配）
+         */
+        async function renderCurrentPage() {
+            const pageNum = state.currentPage;
+            console.log(`渲染页码: ${pageNum}`);
+            
+            // 清空容器
+            const originalContainer = document.getElementById('original-pdf-container');
+            const compareContainer = document.getElementById('compare-pdf-container');
+            originalContainer.innerHTML = '';
+            compareContainer.innerHTML = '';
+
+            // 获取当前页的差异数据
+            const pageDiffs = state.pageDiffMap.get(pageNum) || { original: [], compare: [] };
+            console.log(`第${pageNum}页差异: 原始文件${pageDiffs.original.length}处, 对比文件${pageDiffs.compare.length}处`);
+
+            // 渲染原始PDF（当前页码）
+            if (pageNum <= state.originalDoc.pages.length && state.originalPdf) {
+                await renderPdfPage('original', pageNum, originalContainer, pageDiffs.original);
+            } else {
+                renderEmptyPage(originalContainer, `原始文件无第${pageNum}页`);
+            }
+
+            // 渲染对比PDF（当前页码）
+            if (pageNum <= state.compareDoc.pages.length && state.comparePdf) {
+                await renderPdfPage('compare', pageNum, compareContainer, pageDiffs.compare);
+            } else {
+                renderEmptyPage(compareContainer, `对比文件无第${pageNum}页`);
+            }
+        }
+
+        /**
+         * 渲染PDF页面（精准分页+高亮）
+         */
+        async function renderPdfPage(type, pageNum, container, highlights) {
+            try {
+                const pdf = state[`${type}Pdf`];
+                const page = await pdf.getPage(pageNum); // 渲染指定页码
+                
+                // 获取精准视口
+                const viewport = page.getViewport({ scale: state.zoomLevel });
+                
+                // 创建页面包装器
+                const pageWrapper = document.createElement('div');
+                pageWrapper.className = 'pdf-page-wrapper';
+                pageWrapper.style.width = `${viewport.width}px`;
+                pageWrapper.style.height = `${viewport.height}px`;
+                
+                // 创建PDF画布
+                const pdfCanvas = document.createElement('canvas');
+                pdfCanvas.className = 'pdf-page';
+                pdfCanvas.width = viewport.width;
+                pdfCanvas.height = viewport.height;
+                
+                // 精准渲染PDF
+                const ctx = pdfCanvas.getContext('2d');
+                await page.render({
+                    canvasContext: ctx,
+                    viewport: viewport
+                }).promise;
+                
+                // 创建高亮层
+                const highlightCanvas = document.createElement('canvas');
+                highlightCanvas.className = 'highlight-layer';
+                highlightCanvas.width = viewport.width;
+                highlightCanvas.height = viewport.height;
+                highlightCanvas.style.width = `${viewport.width}px`;
+                highlightCanvas.style.height = `${viewport.height}px`;
+                
+                // 绘制精准高亮
+                drawPreciseHighlights(highlightCanvas.getContext('2d'), highlights, state.zoomLevel, viewport);
+                
+                // 组装DOM
+                pageWrapper.appendChild(pdfCanvas);
+                pageWrapper.appendChild(highlightCanvas);
+                container.appendChild(pageWrapper);
+
+                console.log(`${type} 第${pageNum}页渲染完成: 高亮数=${highlights.length}, 缩放=${state.zoomLevel}`);
+
+            } catch (error) {
+                console.error(`${type} 第${pageNum}页渲染失败:`, error);
+                renderErrorPage(container, `第${pageNum}页渲染失败`);
+            }
+        }
+
+        /**
+         * 绘制精准高亮
+         */
+        function drawPreciseHighlights(ctx, highlights, zoom, viewport) {
+            if (!highlights || highlights.length === 0) return;
+            
+            const expand = CONFIG.HIGHLIGHT_EXPAND * zoom;
+
+            highlights.forEach((highlight, index) => {
+                if (!highlight) return;
+                
+                // 精准计算坐标
+                const x = highlight.x * zoom - expand;
+                const y = highlight.y * zoom - expand;
+                const width = Math.max(highlight.width * zoom + expand * 2, 15);
+                const height = Math.max(highlight.height * zoom + expand * 2, 15);
+
+                console.log(`第${state.currentPage}页高亮${index}: 文本="${highlight.text}", 坐标(${x},${y}) 宽=${width} 高=${height}`);
+
+                // 设置样式
+                let fillStyle, strokeStyle, labelColor, labelText;
+                if (highlight.type === 'delete') {
+                    fillStyle = 'rgba(239, 68, 68, 0.4)';
+                    strokeStyle = 'rgba(220, 38, 38, 1)';
+                    labelColor = '#dc2626';
+                    labelText = `删除: ${highlight.text}`;
+                } else {
+                    fillStyle = 'rgba(34, 197, 94, 0.4)';
+                    strokeStyle = 'rgba(22, 163, 74, 1)';
+                    labelColor = '#16a34a';
+                    labelText = `新增: ${highlight.text}`;
+                }
+
+                // 绘制高亮框
+                ctx.fillStyle = fillStyle;
+                ctx.strokeStyle = strokeStyle;
+                ctx.lineWidth = 2 * zoom;
+                
+                drawRoundedRect(ctx, x, y, width, height, 3 * zoom);
+                ctx.fill();
+                ctx.stroke();
+
+                // 绘制精准标签
+                drawPreciseLabel(ctx, x, y, width, height, labelText, labelColor, zoom, viewport);
+            });
+        }
+
+        /**
+         * 绘制精准标签
+         */
+        function drawPreciseLabel(ctx, x, y, width, height, text, color, zoom, viewport) {
+            const fontSize = 12 * zoom;
+            ctx.font = `${fontSize}px Arial bold`;
+            const textWidth = ctx.measureText(text).width;
+            const textHeight = fontSize * 1.2;
+            
+            const labelWidth = textWidth + CONFIG.LABEL_PADDING * 2 * zoom;
+            const labelHeight = textHeight + CONFIG.LABEL_PADDING * 2 * zoom;
+            
+            // 优先位置：高亮框右上角
+            let labelX = x + width + CONFIG.LABEL_OFFSET * zoom;
+            let labelY = y;
+            
+            // 边界检测
+            if (labelX + labelWidth > viewport.width) {
+                labelX = x - labelWidth - CONFIG.LABEL_OFFSET * zoom;
+                if (labelX < 0) {
+                    labelX = x + width - labelWidth - CONFIG.LABEL_OFFSET * zoom;
+                    labelY = y + CONFIG.LABEL_OFFSET * zoom;
+                }
+            }
+            
+            if (labelY < 0) {
+                labelY = y + height + CONFIG.LABEL_OFFSET * zoom;
+            }
+            
+            if (labelY + labelHeight > viewport.height) {
+                labelY = y - labelHeight - CONFIG.LABEL_OFFSET * zoom;
+            }
+            
+            // 确保在可视区域
+            labelX = Math.max(2 * zoom, Math.min(labelX, viewport.width - labelWidth - 2 * zoom));
+            labelY = Math.max(2 * zoom, Math.min(labelY, viewport.height - labelHeight - 2 * zoom));
+            
+            // 绘制标签背景
+            ctx.fillStyle = 'white';
+            ctx.fillRect(labelX, labelY, labelWidth, labelHeight);
+            
+            // 绘制标签边框
+            ctx.strokeStyle = color;
+            ctx.lineWidth = 1 * zoom;
+            ctx.strokeRect(labelX, labelY, labelWidth, labelHeight);
+            
+            // 绘制标签文本
+            ctx.fillStyle = color;
+            ctx.textBaseline = 'middle';
+            ctx.textAlign = 'left';
+            ctx.fillText(
+                text, 
+                labelX + CONFIG.LABEL_PADDING * zoom, 
+                labelY + labelHeight / 2
+            );
+        }
+
+        /**
+         * 绘制圆角矩形
+         */
+        function drawRoundedRect(ctx, x, y, width, height, radius) {
+            ctx.beginPath();
+            ctx.moveTo(x + radius, y);
+            ctx.lineTo(x + width - radius, y);
+            ctx.arcTo(x + width, y, x + width, y + radius, radius);
+            ctx.lineTo(x + width, y + height - radius);
+            ctx.arcTo(x + width, y + height, x + width - radius, y + height, radius);
+            ctx.lineTo(x + radius, y + height);
+            ctx.arcTo(x, y + height, x, y + height - radius, radius);
+            ctx.lineTo(x, y + radius);
+            ctx.arcTo(x, y, x + radius, y, radius);
+            ctx.closePath();
+        }
+
+        /**
+         * 渲染空白页
+         */
+        function renderEmptyPage(container, message) {
+            const canvas = document.createElement('canvas');
+            canvas.className = 'pdf-page';
+            canvas.width = 595 * state.zoomLevel;
+            canvas.height = 842 * state.zoomLevel;
+            
+            const ctx = canvas.getContext('2d');
+            ctx.fillStyle = '#f8fafc';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            
+            ctx.fillStyle = '#64748b';
+            ctx.font = `${18 * state.zoomLevel}px Arial`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(message || '无页面内容', canvas.width / 2, canvas.height / 2);
+            
+            container.appendChild(canvas);
+        }
+
+        /**
+         * 渲染错误页
+         */
+        function renderErrorPage(container, message) {
+            const canvas = document.createElement('canvas');
+            canvas.className = 'pdf-page';
+            canvas.width = 595 * state.zoomLevel;
+            canvas.height = 842 * state.zoomLevel;
+            
+            const ctx = canvas.getContext('2d');
+            ctx.fillStyle = '#fee2e2';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            
+            ctx.fillStyle = '#dc2626';
+            ctx.font = `${18 * state.zoomLevel}px Arial`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(message || '加载失败', canvas.width / 2, canvas.height / 2);
+            
+            container.appendChild(canvas);
+        }
+
+        /**
+         * 更新分页显示
+         */
+        function updatePageDisplay() {
+            document.getElementById('page-info').textContent = `第 ${state.currentPage} 页 / 共 ${state.maxPages} 页`;
+            document.getElementById('prev-btn').disabled = state.currentPage <= 1;
+            document.getElementById('next-btn').disabled = state.currentPage >= state.maxPages;
+        }
+
+        /**
+         * 更新缩放显示
+         */
+        function updateZoomDisplay() {
+            document.getElementById('zoom-level').textContent = `${Math.round(state.zoomLevel * 100)}%`;
+        }
+    </script>
+</body>
+</html>

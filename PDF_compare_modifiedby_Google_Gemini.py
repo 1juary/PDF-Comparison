@@ -1,34 +1,30 @@
-import fitz
+import fitz  # PyMuPDF
 from pathlib import Path
-from PyInstaller.utils.hooks import collect_submodules
-from typing import List, Tuple
+# from PyInstaller.utils.hooks import collect_submodules # 如果需要打包exe可取消注释
+from typing import List, Tuple, Optional
 from os import path
 from time import sleep
 from json import load, dump
 from tempfile import TemporaryDirectory
 
-# ---------------------------------------------------------
-# 新增/修改的 Imports (为了支持高级对比功能)
-# ---------------------------------------------------------
-import cv2  # 引入完整的 cv2
-import numpy as np  # 引入完整的 numpy
-from numpy import array, where, all, int32
+# 引入数值计算和图像处理库
+import numpy as np
+import cv2
 from PIL import Image, ImageChops, ImageDraw, ImageOps, ImageFont
-from skimage.metrics import structural_similarity as ssim  # 引入 SSIM
-
-# 保留原有的具体 cv2 导入以兼容旧代码风格 (也可以直接用 cv2.xxx)
-from cv2 import findContours, threshold, approxPolyDP, arcLength, contourArea, boundingRect, THRESH_BINARY, \
-    RETR_EXTERNAL, CHAIN_APPROX_SIMPLE, dilate, getStructuringElement, MORPH_RECT
 
 from PySide6.QtCore import QThread, Signal, Slot, Qt
 from PySide6.QtWidgets import QMainWindow, QProgressBar, QApplication, QWidget, QVBoxLayout, QTextBrowser, QDialog, \
     QFrame, QPushButton, QLabel, \
     QSpinBox, QDoubleSpinBox, QComboBox, QCheckBox, QLineEdit, QGroupBox, QTabWidget, QStyleFactory, QFormLayout, \
-    QHBoxLayout, QSpacerItem, QSizePolicy, QFileDialog
+    QHBoxLayout, QSpacerItem, QSizePolicy, QFileDialog, QGridLayout
 from PySide6.QtGui import QIcon
 
 
-class AdvancedSettings(QWidget):  # 处理高级设置选项的GUI组件
+# =================================================================================
+# GUI 组件 (保持原样)
+# =================================================================================
+
+class AdvancedSettings(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.settings = load_settings()
@@ -37,7 +33,7 @@ class AdvancedSettings(QWidget):  # 处理高级设置选项的GUI组件
         self.threshold_desc = QLabel(
             "To analyze the pdf, it must be thresholded (converted to pure black and white). The threshold setting controls the point at which pixels become white or black determined based upon grayscale color values of 0-255")
         self.threshold_desc.setWordWrap(True)
-        self.threshold_desc.setStyleSheet("color: black; font: 12px Arial, sans-serif;")
+        self.threshold_desc.setStyleSheet("color: white; font: 12px Arial, sans-serif;")
         self.threshold_spinbox = QSpinBox(self)
         self.threshold_spinbox.setMinimum(0)
         self.threshold_spinbox.setMaximum(255)
@@ -48,7 +44,7 @@ class AdvancedSettings(QWidget):  # 处理高级设置选项的GUI组件
         self.minimum_area_desc = QLabel(
             "When marking up the pdf, boxes are created to highlight major changes. The minimum area setting controls the minimum size the boxes can be which will ultimately control what becomes classfied as a significant change.")
         self.minimum_area_desc.setWordWrap(True)
-        self.minimum_area_desc.setStyleSheet("color: black; font: 12px Arial, sans-serif;")
+        self.minimum_area_desc.setStyleSheet("color: white; font: 12px Arial, sans-serif;")
         self.minimum_area_spinbox = QSpinBox(self)
         self.minimum_area_spinbox.setMinimum(0)
         self.minimum_area_spinbox.setMaximum(1000)
@@ -59,7 +55,7 @@ class AdvancedSettings(QWidget):  # 处理高级设置选项的GUI组件
         self.epsilon_desc = QLabel(
             "When marking up the pdf, outlines are created to show any change. The precision setting controls the maximum distance of the created contours around a change. Smaller values will have better precision and follow curves better and higher values will have more space between the contour and the change.")
         self.epsilon_desc.setWordWrap(True)
-        self.epsilon_desc.setStyleSheet("color: black; font: 12px Arial, sans-serif;")
+        self.epsilon_desc.setStyleSheet("color: white; font: 12px Arial, sans-serif;")
         self.epsilon_spinbox = QDoubleSpinBox(self)
         self.epsilon_spinbox.setMinimum(0.000)
         self.epsilon_spinbox.setMaximum(1.000)
@@ -81,14 +77,15 @@ class AdvancedSettings(QWidget):  # 处理高级设置选项的GUI组件
         layout.addWidget(self.threshold_spinbox)
 
         self.setLayout(layout)
-        self.setStyleSheet('''
+        self.setStyleSheet('''   
             QLabel {
-                color: black;
+                color: white;
                 font: 14px Arial, sans-serif;
             }
             QSpinBox, QDoubleSpinBox {
                 color: black;
                 font: 14px Arial, sans-serif;
+                background-color: #f0f0f0;
             }
         ''')
 
@@ -105,7 +102,7 @@ class AdvancedSettings(QWidget):  # 处理高级设置选项的GUI组件
         save_settings(self.settings)
 
 
-class DPISettings(QWidget):  # 处理DPI设置选项的GUI组件
+class DPISettings(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.parent_window = window
@@ -171,25 +168,13 @@ class DPISettings(QWidget):  # 处理DPI设置选项的GUI组件
         self.setLayout(layout)
         self.setStyleSheet('''
             QLabel {
-                color: black;
+                color: white;
                 font: 14px Arial, sans-serif;
             }
             QSpinBox {
                 color: black;
                 font: 14px Arial, sans-serif;
-            }
-            QComboBox {
-                height: 30px;
-                border-radius: 5px;
-                background-color: #454545;
-                selection-background-color: #ff5e0e;
-                color: white;
-            }
-            QComboBox QAbstractItemView {
-                padding: 10px;
-                background-color: #454545;
-                selection-background-color: #ff5e0e;
-                color: white;
+                background-color: #f0f0f0;
             }
         ''')
 
@@ -218,7 +203,7 @@ class DPISettings(QWidget):  # 处理DPI设置选项的GUI组件
         save_settings(self.settings)
 
 
-class OutputSettings(QWidget):  # 处理输出设置选项的GUI组件
+class OutputSettings(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.settings = load_settings()
@@ -327,12 +312,16 @@ class OutputSettings(QWidget):  # 处理输出设置选项的GUI组件
         self.setLayout(main_layout)
         self.setStyleSheet('''
             QLabel {
-                color: black;
+                color: white;
                 font: 14px Arial, sans-serif;
             }
             QSpinBox {
                 color: black;
                 font: 14px Arial, sans-serif;
+            }
+            QLineEdit {
+                color: black;
+                background-color: #f0f0f0;
             }
             QComboBox {
                 height: 30px;
@@ -349,8 +338,21 @@ class OutputSettings(QWidget):  # 处理输出设置选项的GUI组件
                 font: 14px Arial, sans-serif;
             }
             QCheckBox {
-                color: black;
+                color: white;
                 font: 14px Arial, sans-serif;
+            }
+            QGroupBox {
+                color: white;
+                font: bold 14px Arial, sans-serif;
+                border: 1px solid silver;
+                border-radius: 6px;
+                margin-top: 6px;
+                padding-top: 10px;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 7px;
+                padding: 0 3px 0 3px;
             }
         ''')
 
@@ -362,8 +364,11 @@ class OutputSettings(QWidget):  # 处理输出设置选项的GUI组件
         else:
             self.settings["OUTPUT_PATH"] = self.specified_entry.text()
             self.settings["OUTPUT_PATH"].replace("\\", "\\\\")
-            self.settings["OUTPUT_PATH"] += "\\"
+            if not self.settings["OUTPUT_PATH"].endswith("\\"):
+                self.settings["OUTPUT_PATH"] += "\\"
 
+        # Don't save if it's triggered by text change and combox is not "Specified"
+        # but logic here is simple update
         save_settings(self.settings)
 
     def set_output_images(self, state):
@@ -407,12 +412,12 @@ class OutputSettings(QWidget):  # 处理输出设置选项的GUI组件
         save_settings(self.settings)
 
 
-class SettingsDialog(QDialog):  # 设置对话框
+class SettingsDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Settings")
         self.setWindowModality(Qt.ApplicationModal)
-        self.setFixedSize(500, 500)
+        self.setFixedSize(500, 600)
 
         self.tab_widget = QTabWidget(self)
 
@@ -429,18 +434,28 @@ class SettingsDialog(QDialog):  # 设置对话框
         self.setLayout(layout)
         self.setStyleSheet('''
             QDialog {
-                color: black;
+                background-color: #333333;
+                color: white;
             }
-            QLabel {
-                color: black;
+            QTabWidget::pane {
+                border: 1px solid #444;
+                background: #333;
             }
-            QSpinBox, QDoubleSpinBox {
+            QTabBar::tab {
+                background: #555;
+                color: white;
+                padding: 8px 20px;
+                border-top-left-radius: 4px;
+                border-top-right-radius: 4px;
+            }
+            QTabBar::tab:selected {
+                background: #ff5e0e;
                 color: black;
             }
         ''')
 
 
-class CustomTitleBar(QFrame):  # 自定义标题栏
+class CustomTitleBar(QFrame):
     def __init__(self, parent):
         super().__init__(parent)
         self.parent = parent
@@ -451,7 +466,7 @@ class CustomTitleBar(QFrame):  # 自定义标题栏
 
         spacer_item = QSpacerItem(20, 20, QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
 
-        self.title_label = QLabel("PyPDFCompare")
+        self.title_label = QLabel("PyPDFCompare (Region Enhanced)")
         self.settings_button = QPushButton("Settings", self)
         self.settings_button.setObjectName('SettingsButton')
         self.settings_button.setFixedSize(65, 25)
@@ -502,7 +517,7 @@ class CustomTitleBar(QFrame):  # 自定义标题栏
         settings_dialog.exec()
 
 
-class DragDropLabel(QPushButton):  # 拖放区域组件
+class DragDropLabel(QPushButton):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._parent = parent
@@ -522,9 +537,7 @@ class DragDropLabel(QPushButton):  # 拖放区域组件
 
     def browse_files(self) -> None:
         files = list(QFileDialog.getOpenFileNames(self, "Open Files", "", "PDF Files (*.pdf)")[0])
-        if files and len(files) == 2:
-            self.setText(f"Main File: {files[0]}\nSecondary File: {files[1]}")
-            self._parent.files = files
+        self.update_parent_files(files)
 
     def dragEnterEvent(self, event):
         if event.mimeData().hasUrls():
@@ -533,12 +546,19 @@ class DragDropLabel(QPushButton):  # 拖放区域组件
     def dropEvent(self, event):
         files = [url.toLocalFile() for url in event.mimeData().urls()]
         files.reverse()
+        self.update_parent_files(files)
+
+    def update_parent_files(self, files):
         if files and len(files) == 2:
-            self.setText(f"Main File: {files[0]}\nSecondary File: {files[1]}")
             self._parent.files = files
+            # 假设 Files[0] 是新文件(New/Blue), Files[1] 是旧文件(Old/Red)
+            # 在CompareThread里：files[0] if self.MAIN_PAGE == "New Document"
+            self._parent.file_new_edit.setText(files[0])
+            self._parent.file_old_edit.setText(files[1])
+            self.setText(f"Files Selected")
 
 
-class ProgressWindow(QMainWindow):  # 进度显示窗口
+class ProgressWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("PyPDFCompare")
@@ -596,13 +616,13 @@ class ProgressWindow(QMainWindow):  # 进度显示窗口
         self.close()
 
 
-class MainWindow(QMainWindow):  # 应用程序主窗口
+class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
 
         self.setWindowTitle("Maxfield Auto Markup")
-        self.setGeometry(100, 100, 500, 300)
-        # self.setWindowIcon(QIcon("app_icon.png")) # Commented out as icon might not exist in context
+        self.setGeometry(100, 100, 500, 350)
+        # self.setWindowIcon(QIcon("app_icon.png")) # 找不到图标时会报错，建议注释或确保文件存在
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint)
         self.title_bar = CustomTitleBar(self)
         self.title_bar.setObjectName("TitleBar")
@@ -614,7 +634,52 @@ class MainWindow(QMainWindow):  # 应用程序主窗口
 
         layout.setContentsMargins(10, 10, 10, 10)
         layout.setSpacing(10)
+
+        # 1. 修改：拖放区域只作为操作入口
         self.drop_label = DragDropLabel(self)
+        layout.addWidget(self.drop_label)
+
+        # 2. 新增：独立显示文件路径的区域 + 交换按钮
+        file_group = QGroupBox("Selected Documents")
+
+        file_display_layout = QVBoxLayout()
+        form_layout = QFormLayout()
+
+        self.file_old_edit = QLineEdit()
+        self.file_old_edit.setReadOnly(True)
+        self.file_old_edit.setPlaceholderText("Reference File (Old) - Red Markup")
+        self.file_old_edit.setStyleSheet("color: #ff5555; font-weight: bold;")
+
+        self.file_new_edit = QLineEdit()
+        self.file_new_edit.setReadOnly(True)
+        self.file_new_edit.setPlaceholderText("New File (Current) - Blue Markup")
+        self.file_new_edit.setStyleSheet("color: #55aaff; font-weight: bold;")
+
+        form_layout.addRow(QLabel("Old (Ref):"), self.file_old_edit)
+        form_layout.addRow(QLabel("New (Cur):"), self.file_new_edit)
+
+        self.swap_button = QPushButton("⇅ Swap New/Old Files")
+        self.swap_button.setStyleSheet("""
+            QPushButton {
+                background-color: #444; 
+                color: white; 
+                border: 1px solid #777;
+                border-radius: 4px;
+                padding: 4px;
+            }
+            QPushButton:hover {
+                background-color: #555;
+            }
+        """)
+        self.swap_button.clicked.connect(self.swap_files)
+
+        file_display_layout.addLayout(form_layout)
+        file_display_layout.addWidget(self.swap_button)
+
+        file_group.setLayout(file_display_layout)
+        layout.addWidget(file_group)
+
+        # 按钮和其他设置
         self.compare_button = QPushButton("Compare", self)
         self.compare_button.clicked.connect(self.compare)
         self.dpi_label = QLabel("DPI:", self)
@@ -630,7 +695,6 @@ class MainWindow(QMainWindow):  # 应用程序主窗口
         self.page_combo.setCurrentText(self.settings["PAGE_SIZE"])
         self.page_combo.currentTextChanged.connect(self.update_page_size)
 
-        layout.addWidget(self.drop_label)
         layout.addWidget(self.compare_button)
         layout.addWidget(self.dpi_label)
         layout.addWidget(self.dpi_combo)
@@ -678,7 +742,27 @@ class MainWindow(QMainWindow):  # 应用程序主窗口
             #CloseButton:hover {
                 background-color: red;
             }
+            QGroupBox {
+                color: white;
+                font-weight: bold;
+                border: 1px solid #555;
+                margin-top: 6px;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 10px;
+                padding: 0 3px;
+            }
         """)
+
+    def swap_files(self):
+        """交换新旧文件的槽函数"""
+        if self.files and len(self.files) == 2:
+            # 交换列表中的元素
+            self.files = [self.files[1], self.files[0]]
+            # 更新UI显示 (注意 update_parent_files 逻辑是 files[0] -> New, files[1] -> Old)
+            self.file_new_edit.setText(self.files[0])
+            self.file_old_edit.setText(self.files[1])
 
     def update_dpi(self, dpi):
         if dpi != "":
@@ -699,7 +783,11 @@ class MainWindow(QMainWindow):  # 应用程序主窗口
             compare_thread.start()
 
 
-class CompareThread(QThread):  # 比较线程，执行核心比较功能
+# =================================================================================
+# 核心修改区域：CompareThread (区域特征增强版)
+# =================================================================================
+
+class CompareThread(QThread):
     progressUpdated = Signal(int)
     compareComplete = Signal(int)
     logMessage = Signal(str)
@@ -712,10 +800,9 @@ class CompareThread(QThread):  # 比较线程，执行核心比较功能
         self.INCLUDE_IMAGES = compare_settings.get("INCLUDE_IMAGES")
         self.MAIN_PAGE = compare_settings.get("MAIN_PAGE")
         self.THRESHOLD = compare_settings.get("THRESHOLD")
-        self.MERGE_THRESHOLD = int(self.DPI_LEVEL / 100 * self.PAGE_SIZE[0] * self.PAGE_SIZE[1]) if self.PAGE_SIZE[
-                                                                                                        0] and \
-                                                                                                    self.PAGE_SIZE[
-                                                                                                        1] else None
+
+        self.STRUCTURAL_MERGE_KERNEL = max(3, int(self.DPI_LEVEL / 25))
+
         self.MIN_AREA = compare_settings.get("MIN_AREA")
         self.EPSILON = compare_settings.get("EPSILON")
         self.OUTPUT_PATH = compare_settings.get("OUTPUT_PATH")
@@ -740,46 +827,32 @@ class CompareThread(QThread):  # 比较线程，执行核心比较功能
         try:
             self.handle_files(self.files)
         except Exception as e:
-            self.logMessage.emit(f"Error processing files: {e}")
+            self.logMessage.emit(f"Error during processing: {str(e)}")
             import traceback
             traceback.print_exc()
 
-    # --------------------------------------------------------------------------------
-    # 核心新功能：图像配准 (Image Registration)
-    # 用于解决 CAD 图纸或文档整体偏移导致的对比错误
-    # --------------------------------------------------------------------------------
-    def align_images(self, img1_cv, img2_cv):
-        """
-        使用 ORB 特征点检测将 img2_cv 对齐到 img1_cv。
-        返回: (aligned_img2, is_success)
-        """
-        # 转灰度
+    def align_images_global(self, img1_cv, img2_cv):
+        """ 全局对齐，用于修正整体的旋转或位移 """
         gray1 = cv2.cvtColor(img1_cv, cv2.COLOR_BGR2GRAY)
         gray2 = cv2.cvtColor(img2_cv, cv2.COLOR_BGR2GRAY)
 
-        # ORB 特征检测
-        orb = cv2.ORB_create(nfeatures=5000)
+        max_features = 5000
+        orb = cv2.ORB_create(max_features)
         keypoints1, descriptors1 = orb.detectAndCompute(gray1, None)
         keypoints2, descriptors2 = orb.detectAndCompute(gray2, None)
 
         if descriptors1 is None or descriptors2 is None:
-            self.logMessage.emit("Warning: Not enough features for alignment. Skipping alignment.")
-            return img2_cv, False
+            return img2_cv
 
-        # 匹配
         matcher = cv2.DescriptorMatcher_create(cv2.DESCRIPTOR_MATCHER_BRUTEFORCE_HAMMING)
         matches = matcher.match(descriptors1, descriptors2, None)
         matches.sort(key=lambda x: x.distance, reverse=False)
-
-        # 筛选优质匹配点 (Top 15%)
         num_good_matches = int(len(matches) * 0.15)
         matches = matches[:num_good_matches]
 
-        if len(matches) < 4:
-            self.logMessage.emit("Warning: Not enough good matches. Skipping alignment.")
-            return img2_cv, False
+        if len(matches) < 10:
+            return img2_cv
 
-        # 提取坐标
         points1 = np.zeros((len(matches), 2), dtype=np.float32)
         points2 = np.zeros((len(matches), 2), dtype=np.float32)
 
@@ -787,218 +860,351 @@ class CompareThread(QThread):  # 比较线程，执行核心比较功能
             points1[i, :] = keypoints1[match.queryIdx].pt
             points2[i, :] = keypoints2[match.trainIdx].pt
 
-        # 计算变换矩阵
-        h_matrix, mask = cv2.findHomography(points2, points1, cv2.RANSAC)
+        h, mask = cv2.findHomography(points2, points1, cv2.RANSAC)
+        if h is None:
+            return img2_cv
 
-        # 执行变换
         height, width, channels = img1_cv.shape
-        aligned_img2 = cv2.warpPerspective(img2_cv, h_matrix, (width, height))
+        aligned_img = cv2.warpPerspective(img2_cv, h, (width, height))
+        return aligned_img
 
-        return aligned_img2, True
+    def get_content_regions(self, img_bgr) -> List[Tuple[int, int, int, int]]:
+        """
+        基于形态学，分离出非白色背景的独立区域（ROI）
+        返回: List of (x, y, w, h)
+        """
+        gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
 
-    # --------------------------------------------------------------------------------
-    # 重写的标记差异函数：使用 SSIM 和 自动对齐
-    # --------------------------------------------------------------------------------
-    def mark_differences(self, page_num: int, image1: Image.Image, image2: Image.Image) -> List[Image.Image]:
-        # 1. 预处理：尺寸一致性检查 (保留旧逻辑)
-        if image1.size != image2.size:
-            if not self.SCALE_OUTPUT:
-                self.logMessage.emit(f"Warning: Page {page_num + 1} sizes don't match. Attempting to resize.")
-            image2 = image2.resize(image1.size)
+        # 1. 二值化 (反转，内容变白，背景变黑)
+        # 假设背景是白色，阈值250以上算背景
+        _, thresh = cv2.threshold(gray, 250, 255, cv2.THRESH_BINARY_INV)
 
-        # 2. 转换 PIL -> OpenCV (BGR)
-        img1_cv = cv2.cvtColor(np.array(image1), cv2.COLOR_RGB2BGR)
-        img2_cv = cv2.cvtColor(np.array(image2), cv2.COLOR_RGB2BGR)
+        # 2. 形态学膨胀 (连接相邻文字成块)
+        # 横向膨胀力度大一些，纵向小一些，适合文本行
+        # 根据 DPI 动态调整核大小
+        h_k = max(5, int(self.DPI_LEVEL / 20))
+        v_k = max(2, int(self.DPI_LEVEL / 60))
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (h_k, v_k))
 
-        # 3. 自动对齐：将 image2 (Old) 对齐到 image1 (New)
-        # 这一步非常关键，解决了 CAD 图纸整体偏移的问题
-        self.logMessage.emit(f"Aligning page {page_num + 1}...")
-        img2_aligned_cv, aligned = self.align_images(img1_cv, img2_cv)
+        dilated = cv2.dilate(thresh, kernel, iterations=3)
 
-        # 将对齐后的 image2 转回 PIL，用于后续的输出 (Overlay/Old Copy)
-        # 这样用户在查看 "Old Copy" 时看到的是已经纠正过位置的版本
-        image2_aligned_pil = Image.fromarray(cv2.cvtColor(img2_aligned_cv, cv2.COLOR_BGR2RGB))
+        # 3. 查找轮廓
+        contours, hierarchy = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-        # 4. 计算 SSIM (结构相似性) 差异图
-        self.logMessage.emit(f"Calculating SSIM differences...")
-        gray1 = cv2.cvtColor(img1_cv, cv2.COLOR_BGR2GRAY)
-        gray2 = cv2.cvtColor(img2_aligned_cv, cv2.COLOR_BGR2GRAY)
+        regions = []
+        min_w = int(self.DPI_LEVEL / 10)  # 过滤太小的噪点
+        min_h = int(self.DPI_LEVEL / 10)
 
-        # compute SSIM
-        (score, diff_map) = ssim(gray1, gray2, full=True)
-        # diff_map 范围是 -1 到 1 (或者0到1)，1表示完全相同。我们需要将其转换为 0-255 的差异图
-        # diff_map: 相似的地方是 1.0 (白色)，不同的地方更黑。
-        # 为了方便处理，我们将其反转：差异越大越亮 (255)
-        diff_map = (diff_map * 255).astype("uint8")
-        diff_map_inverted = 255 - diff_map
+        for cnt in contours:
+            x, y, w, h = cv2.boundingRect(cnt)
+            if w > min_w and h > min_h:
+                regions.append((x, y, w, h))
 
-        # 5. 图像形态学处理 (Dilation)
-        # 将零散的像素点聚合成块，避免噪点干扰
-        thresh = cv2.threshold(diff_map_inverted, self.THRESHOLD, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)[1]
-        kernel = np.ones((5, 5), np.uint8)
-        dilated = cv2.dilate(thresh, kernel, iterations=2)
+        # 从上到下排序
+        regions.sort(key=lambda r: r[1])
+        return regions
 
-        # 6. 查找轮廓
-        contours, _ = cv2.findContours(dilated.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    def add_visualization_legend(self, image: Image.Image) -> Image.Image:
+        """
+        在图片顶部添加图例说明
+        [ 蓝色框: 新增 ] [ 红色框: 删除 ] [ 橙色框: 修改 ]
+        """
+        w, h = image.size
+        # 增加高度以容纳图例
+        legend_height = max(60, int(h * 0.05))
 
-        # 准备绘制结果的图层
-        marked_image = Image.new("RGBA", image1.size, (0, 0, 0, 0))
-        # 绘制原图作为底图 (如果需要半透明叠加，可以调整)
-        marked_image.paste(image1, (0, 0))
-        draw = ImageDraw.Draw(marked_image)
+        # 创建一个白条放在顶部
+        new_img = Image.new("RGB", (w, h + legend_height), (255, 255, 255))
+        new_img.paste(image, (0, legend_height))
 
-        existing_boxes = []
+        draw = ImageDraw.Draw(new_img)
 
-        # 定义“结构性变化”的阈值
-        # 如果一个变动区域超过了页面面积的 2%，则认为是结构性变化（如插入图片、段落错位）
-        # 这样可以防止整个页面变红
-        page_area = image1.width * image1.height
-        STRUCTURAL_THRESHOLD = page_area * 0.02
+        # 动态字体大小
+        font_size = max(12, int(w / 80))
+        # 尝试加载默认字体，如果不可用则忽略
+        try:
+            # Linux/Windows通用尝试
+            font = ImageFont.truetype("arial.ttf", font_size)
+        except:
+            font = ImageFont.load_default()
 
-        structural_change_count = 0
-        detail_change_count = 0
+        # 定义图例项
+        items = [
+            ("New/Added", "blue", (200, 220, 255)),
+            ("Old/Removed", "red", (255, 200, 200)),
+            ("Modified/Typos", "orange", None)
+        ]
 
-        for c in contours:
-            area = cv2.contourArea(c)
+        # 1. 计算每个图例项的宽度
+        box_size = int(font_size * 1.5)
+        padding = 10
+        item_spacing = 30
 
-            # 忽略微小噪点
-            if area < self.MIN_AREA:
-                continue
+        item_widths = []
+        for text, color, fill in items:
+            try:
+                # Pillow >= 9.2.0
+                text_w = draw.textlength(text, font=font)
+            except:
+                # Fallback estimate
+                text_w = len(text) * font_size * 0.6
 
-            x, y, w, h = cv2.boundingRect(c)
+            total_item_w = box_size + padding + text_w
+            item_widths.append(total_item_w)
 
-            # 判断变化类型
-            if area > STRUCTURAL_THRESHOLD:
-                # 结构性变化 -> 黄色框
-                # 不计算合并逻辑，直接画大框
-                draw.rectangle([x, y, x + w, y + h], outline=(255, 255, 0, 255), width=int(self.DPI_LEVEL / 60))
-                # 尝试写字标注 (如果需要的话)
-                # draw.text((x, y-10), "Structural Change", fill=(255, 255, 0, 255))
-                structural_change_count += 1
+        # 2. 计算总宽度并确定起始位置 (居中)
+        total_legend_width = sum(item_widths) + (len(items) - 1) * item_spacing
+
+        start_x = (w - total_legend_width) // 2
+        # 如果图例太宽超出页面，则靠左对齐 (至少保留10px边距)
+        if start_x < 10:
+            start_x = 10
+
+        y_center = legend_height // 2
+        box_top = y_center - box_size // 2
+
+        current_x = start_x
+
+        # 3. 绘制
+        for i, (text, color, fill_color) in enumerate(items):
+            # Draw Box
+            if fill_color:
+                draw.rectangle([current_x, box_top, current_x + box_size, box_top + box_size], outline=color,
+                               fill=fill_color, width=2)
             else:
-                # 细节变化 -> 红色框 (走原有的合并逻辑)
-                new_box = (x, y, x + w, y + h)
+                draw.rectangle([current_x, box_top, current_x + box_size, box_top + box_size], outline=color, width=2)
 
-                # 简单的框合并逻辑
-                merged = False
-                for i, existing_box in enumerate(existing_boxes):
-                    # 距离判断
-                    if (max(new_box[0], existing_box[0]) - min(new_box[2], existing_box[2]) <= self.MERGE_THRESHOLD and
-                            max(new_box[1], existing_box[1]) - min(new_box[3],
-                                                                   existing_box[3]) <= self.MERGE_THRESHOLD):
-                        merged_box = (min(new_box[0], existing_box[0]), min(new_box[1], existing_box[1]),
-                                      max(new_box[2], existing_box[2]), max(new_box[3], existing_box[3]))
-                        existing_boxes[i] = merged_box
-                        merged = True
-                        break
+            # Draw Text
+            draw.text((current_x + box_size + padding, box_top - 2), text, fill="black", font=font)
 
-                if not merged:
-                    existing_boxes.append(new_box)
+            # Move to next
+            current_x += item_widths[i] + item_spacing
 
-        # 绘制细节红框
-        # 创建半透明遮罩
-        overlay = Image.new('RGBA', image1.size, (0, 0, 0, 0))
-        draw_overlay = ImageDraw.Draw(overlay)
+        return new_img
 
-        for box in existing_boxes:
-            # 绘制半透明绿色填充
-            draw_overlay.rectangle([box[0], box[1], box[2], box[3]], fill=(0, 255, 0, 64))
-            # 绘制红色边框
-            draw_overlay.rectangle([box[0], box[1], box[2], box[3]], outline=(255, 0, 0, 255),
-                                   width=int(self.DPI_LEVEL / 100))
-            detail_change_count += 1
+    def mark_differences(self, page_num: int, image1_pil: Image.Image, image2_pil: Image.Image) -> List[Image.Image]:
+        """
+        区域特征对比算法 (Region-based Feature Comparison)
+        """
 
-        marked_image = Image.alpha_composite(marked_image.convert('RGBA'), overlay)
+        # 转 OpenCV 格式
+        img1_cv = cv2.cvtColor(np.array(image1_pil), cv2.COLOR_RGB2BGR)
+        img2_cv = cv2.cvtColor(np.array(image2_pil), cv2.COLOR_RGB2BGR)
+
+        # 0. 全局粗对其 (Pre-alignment)
+        if img1_cv.shape == img2_cv.shape:
+            try:
+                img2_cv = self.align_images_global(img1_cv, img2_cv)
+            except:
+                pass
+
+        # 准备画布
+        diff_canvas = np.ones_like(img1_cv) * 255  # 白底差异图
+        overlay_canvas_r = np.array(image1_pil.convert("L"))  # 红色通道(新内容/差异)
+        overlay_canvas_gb = np.array(image1_pil.convert("L"))  # 青色通道(旧内容/基准)
+
+        # 标记用的图层
+        markup_layer = Image.new('RGBA', image1_pil.size, (0, 0, 0, 0))
+        draw = ImageDraw.Draw(markup_layer)
+
+        # 1. 提取 Page 1 (基准) 的内容区域
+        regions1 = self.get_content_regions(img1_cv)
+
+        # 用于记录 Page 2 哪些像素已经被匹配过了
+        page2_matched_mask = np.zeros(img2_cv.shape[:2], dtype=np.uint8)
+
+        gray1 = cv2.cvtColor(img1_cv, cv2.COLOR_BGR2GRAY)
+        gray2 = cv2.cvtColor(img2_cv, cv2.COLOR_BGR2GRAY)
+
+        total_differences = 0
+
+        # 2. 遍历 Page 1 的区域，去 Page 2 找朋友
+        for (x1, y1, w1, h1) in regions1:
+            # 提取 ROI 模板
+            template = gray1[y1:y1 + h1, x1:x1 + w1]
+
+            # 定义搜索范围 (Search Window)
+            # 假设内容可能上下移动，但水平移动不会太大
+            # 垂直搜索范围：上下各 30% 页面高度
+            search_h_margin = int(img1_cv.shape[0] * 0.3)
+            search_w_margin = int(img1_cv.shape[1] * 0.1)  # 水平 10%
+
+            y_search_start = max(0, y1 - search_h_margin)
+            y_search_end = min(img1_cv.shape[0], y1 + h1 + search_h_margin)
+            x_search_start = max(0, x1 - search_w_margin)
+            x_search_end = min(img1_cv.shape[1], x1 + w1 + search_w_margin)
+
+            # 搜索区域
+            search_region = gray2[y_search_start:y_search_end, x_search_start:x_search_end]
+
+            match_found = False
+            best_match_rect = None  # (x, y, w, h) in Page 2 global coords
+
+            # 只有当搜索区域比模板大时才能搜索
+            if search_region.shape[0] > h1 and search_region.shape[1] > w1:
+                res = cv2.matchTemplate(search_region, template, cv2.TM_CCOEFF_NORMED)
+                min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(res)
+
+                # 相似度阈值 (0.6 比较宽松，因为可能有文字修改)
+                if max_val > 0.6:
+                    match_found = True
+                    # 计算在 Page 2 的全局坐标
+                    match_x = x_search_start + max_loc[0]
+                    match_y = y_search_start + max_loc[1]
+                    best_match_rect = (match_x, match_y, w1, h1)
+
+            if match_found and best_match_rect:
+                mx, my, mw, mh = best_match_rect
+
+                # 标记该区域已在 Page 2 被认领
+                cv2.rectangle(page2_matched_mask, (mx, my), (mx + mw, my + mh), 255, -1)
+
+                # --- 局部精确对比 ---
+                roi2 = gray2[my:my + mh, mx:mx + mw]
+
+                # 计算差异
+                local_diff = cv2.absdiff(template, roi2)
+                _, local_thresh = cv2.threshold(local_diff, self.THRESHOLD, 255, cv2.THRESH_BINARY)
+
+                # 统计差异像素
+                diff_pixels = cv2.countNonZero(local_thresh)
+
+                # 如果差异较多，说明内容有修改 (Typo / Modification)
+                if diff_pixels > 50:  # 噪点过滤
+                    # 在差异图上画出来
+                    # Page 1 位置画红色 (旧内容)
+                    diff_canvas[y1:y1 + h1, x1:x1 + w1][local_thresh > 0] = [0, 0, 255]
+                    # Page 2 位置画蓝色 (新内容) - 可选，为了不混乱，我们通常画在 Page 1 对应位置
+                    # 或者我们可以将 Page 2 的差异也映射回 Page 1 的坐标系显示
+
+                    # 在 Markup 层画黄框 (表示位置找到了，但有修改)
+                    # 查找具体的差异轮廓
+                    l_cnts, _ = cv2.findContours(local_thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                    for lc in l_cnts:
+                        if cv2.contourArea(lc) > 20:  # 忽略微小噪点
+                            lx, ly, lw, lh = cv2.boundingRect(lc)
+                            # 映射回 Page 1 坐标
+                            draw.rectangle([x1 + lx, y1 + ly, x1 + lx + lw, y1 + ly + lh], outline="orange", width=2)
+                            total_differences += 1
+
+                # 更新 Overlay 画布 (将 Page 2 的匹配内容搬运到 Page 1 的位置来做叠图)
+                # 这样即使段落错行，叠图也是重合的！
+                overlay_canvas_r[y1:y1 + h1, x1:x1 + w1] = roi2
+
+            else:
+                # 没找到匹配 -> 这是一个被删除的段落 (Deleted Block)
+                # 在 Markup 画红框
+                draw.rectangle([x1, y1, x1 + w1, y1 + h1], outline="red", width=3, fill=(255, 0, 0, 50))
+                diff_canvas[y1:y1 + h1, x1:x1 + w1] = [0, 0, 255]  # 涂红
+                total_differences += 1
+
+        # 3. 检查 Page 2 中“未被访问”的区域 -> 新增内容 (Inserted Content)
+        # 获取 Page 2 的所有内容区域
+        regions2 = self.get_content_regions(img2_cv)
+
+        for (x2, y2, w2, h2) in regions2:
+            # 检查这个区域的中心点是否已经被 mask 覆盖
+            cx, cy = x2 + w2 // 2, y2 + h2 // 2
+            if page2_matched_mask[cy, cx] == 0:
+                # 这是一个新增区域
+                # 在 Markup 画蓝框
+                # 注意：这是 Page 2 的坐标，我们需要画在 Page 1 的图上
+                # 如果是纯新增，可能覆盖在 Page 1 的空白处，或者与其他内容重叠
+                draw.rectangle([x2, y2, x2 + w2, y2 + h2], outline="blue", width=3, fill=(0, 0, 255, 50))
+
+                # 在差异图上画蓝
+                # 注意边界检查
+                if y2 + h2 < diff_canvas.shape[0] and x2 + w2 < diff_canvas.shape[1]:
+                    # 获取该区域的 mask
+                    roi_gray2 = gray2[y2:y2 + h2, x2:x2 + w2]
+                    _, roi_mask = cv2.threshold(roi_gray2, 250, 255, cv2.THRESH_BINARY_INV)
+                    diff_canvas[y2:y2 + h2, x2:x2 + w2][roi_mask > 0] = [255, 0, 0]
+
+                # 在 Overlay 的红色通道显示新增内容
+                if y2 + h2 < overlay_canvas_r.shape[0] and x2 + w2 < overlay_canvas_r.shape[1]:
+                    # 这里比较暴力，直接覆盖，可能会遮挡 Page 1 的内容
+                    # 但既然是新增的，那个位置在 Page 1 通常是空白
+                    pass
+                    # 为了 Overlay 效果，我们其实不需要动 overlay_canvas_r 对应位置，
+                    # 因为它初始化就是 Page 1。
+                    # 我们需要让这部分变红。
+                    # Overlay 逻辑： R通道=Page2(Aligned), GB通道=Page1
+                    # 对于新增块，Page2 有字(黑)，Page1 无字(白) -> R=0, GB=255 -> Cyan (青色)
+                    # 等等，之前的逻辑是红青互补。
+                    # 我们需要把 Page 2 的这个新增块，贴到 overlay_canvas_r 上
+                    overlay_canvas_r[y2:y2 + h2, x2:x2 + w2] = gray2[y2:y2 + h2, x2:x2 + w2]
+
+                total_differences += 1
+
+        # 4. 生成最终图片
+        markup_image = Image.alpha_composite(image1_pil.convert("RGBA"), markup_layer)
+        markup_image = self.add_visualization_legend(markup_image)  # Add Legend
+
+        # Overlay 合成: R=Page2(Reconstructed), GB=Page1
+        overlay_image = Image.merge("RGB", (
+        Image.fromarray(overlay_canvas_r), image1_pil.convert("L"), image1_pil.convert("L")))
+
+        diff_image = Image.fromarray(cv2.cvtColor(diff_canvas.astype(np.uint8), cv2.COLOR_BGR2RGB))
 
         # 统计
-        total_diffs = structural_change_count + detail_change_count
-        if total_diffs > 0:
-            self.statistics["TOTAL_DIFFERENCES"] += total_diffs
-            self.statistics["PAGES_WITH_DIFFERENCES"].append((page_num, total_diffs))
+        if total_differences > 0:
+            self.statistics["TOTAL_DIFFERENCES"] += total_differences
+            self.statistics["PAGES_WITH_DIFFERENCES"].append((page_num, total_differences))
 
-        # 生成 Difference Image (纯粹的差异可视化)
-        # 将 diff_map_inverted 变成红黑图或者其他高对比度图
-        diff_pil = Image.fromarray(diff_map_inverted)
-        diff_pil = ImageOps.colorize(diff_pil.convert("L"), black="black", white="white")
-        # 或者使用你原本的高对比度风格，这里为了展示 SSIM 的细腻程度，使用灰度图
-
-        # 生成 Overlay Image (将对齐后的 image2 和 image1 叠加)
-        # Convert to numpy for fast processing
-        arr1 = np.array(image1)
-        arr2 = np.array(image2_aligned_pil)
-
-        # 将差异部分标红 (简单叠加)
-        # 这里使用简单的加权平均
-        overlay_pil = Image.blend(image1, image2_aligned_pil, 0.5)
-
-        # ----------------------------------------
-        # 构建输出列表 (保持原有的输出顺序和逻辑)
-        # ----------------------------------------
+        # 输出打包
         output = []
+        target_size = (int(self.PAGE_SIZE[0] * self.DPI_LEVEL), int(self.PAGE_SIZE[1] * self.DPI_LEVEL))
 
-        # 辅助函数：Resize
-        def resize_output(img):
-            target_size = (int(self.PAGE_SIZE[0] * self.DPI_LEVEL), int(self.PAGE_SIZE[1] * self.DPI_LEVEL))
-            return img.resize(target_size)
+        def resize_if_needed(img):
+            if self.SCALE_OUTPUT:
+                return img.resize(target_size)
+            return img
 
-        # 1. New Copy
         if self.INCLUDE_IMAGES["New Copy"]:
-            img_to_add = image1 if self.MAIN_PAGE == "New Document" else image2_aligned_pil
-            if not self.SCALE_OUTPUT: img_to_add = resize_output(img_to_add)
-            output.append(img_to_add)
-
-        # 2. Old Copy (使用对齐后的版本!)
+            output.append(resize_if_needed(image1_pil if self.MAIN_PAGE == "New Document" else image2_pil))
         if self.INCLUDE_IMAGES["Old Copy"]:
-            img_to_add = image2_aligned_pil if self.MAIN_PAGE == "New Document" else image1
-            if not self.SCALE_OUTPUT: img_to_add = resize_output(img_to_add)
-            output.append(img_to_add)
-
-        # 3. Markup
+            output.append(resize_if_needed(image2_pil if self.MAIN_PAGE == "New Document" else image1_pil))
         if self.INCLUDE_IMAGES["Markup"]:
-            img_to_add = marked_image.convert("RGB")
-            if not self.SCALE_OUTPUT: img_to_add = resize_output(img_to_add)
-            output.append(img_to_add)
-
-        # 4. Difference
+            output.append(resize_if_needed(markup_image.convert("RGB")))
         if self.INCLUDE_IMAGES["Difference"]:
-            img_to_add = diff_pil.convert("RGB")
-            if not self.SCALE_OUTPUT: img_to_add = resize_output(img_to_add)
-            output.append(img_to_add)
-
-        # 5. Overlay
+            output.append(resize_if_needed(diff_image))
         if self.INCLUDE_IMAGES["Overlay"]:
-            img_to_add = overlay_pil.convert("RGB")
-            if not self.SCALE_OUTPUT: img_to_add = resize_output(img_to_add)
-            output.append(img_to_add)
+            output.append(resize_if_needed(overlay_image))
 
         return output
 
-    def pdf_to_image(self, page_number: int, doc: fitz.Document) -> Image.Image:  # 将PDF转换成图像
+    def pdf_to_image(self, page_number: int, doc: fitz.Document) -> Image.Image:
         if page_number < doc.page_count:
             pix = doc.load_page(page_number).get_pixmap(dpi=self.DPI_LEVEL)
-            image = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
+            img_array = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)
+            if pix.n == 4:  # RGBA -> RGB
+                img_array = cv2.cvtColor(img_array, cv2.COLOR_RGBA2RGB)
+            image = Image.fromarray(img_array)
         else:
-            pix = doc.load_page(0).get_pixmap(dpi=self.DPI_LEVEL)
-            image = Image.new("RGB", (pix.width, pix.height), (255, 255, 255))
-        del pix
-        if self.SCALE_OUTPUT is True:
+            ref_page = doc.load_page(0)
+            rect = ref_page.rect
+            width = int(rect.width * self.DPI_LEVEL / 72)
+            height = int(rect.height * self.DPI_LEVEL / 72)
+            image = Image.new("RGB", (width, height), (255, 255, 255))
+
+        if self.SCALE_OUTPUT:
             image = image.resize((int(self.PAGE_SIZE[0] * self.DPI_LEVEL), int(self.PAGE_SIZE[1] * self.DPI_LEVEL)))
         return image
 
-    def handle_files(self, files: List[str]) -> str:  # 处理文件比较流程
-        self.logMessage.emit(f"""Processing files:
-    {files[0]}
-    {files[1]}""")
+    def handle_files(self, files: List[str]) -> str:
+        self.logMessage.emit(f"Processing files:\n    {files[0]}\n    {files[1]}")
         toc = []
         current_progress = 0
+
         with fitz.open(files[0 if self.MAIN_PAGE == "New Document" else 1]) as doc1, fitz.open(
                 files[0 if self.MAIN_PAGE == "OLD" else 1]) as doc2:
+
             size = doc1.load_page(0).rect
-            # If page size is auto, self.PAGESIZE will be none
             if self.PAGE_SIZE[0] is None:
-                # Assume 72 DPI for original document resolution
                 self.PAGE_SIZE = (size.width / 72, size.height / 72)
-                self.MERGE_THRESHOLD = int(self.DPI_LEVEL / 120 * self.PAGE_SIZE[0] * self.PAGE_SIZE[1])
+                # 重新计算 kernel
+                self.STRUCTURAL_MERGE_KERNEL = max(3, int(self.DPI_LEVEL / 25))
+
             self.statistics["MAIN_PAGE"] = files[0 if self.MAIN_PAGE == "New Document" else 1]
             filename = files[0 if self.MAIN_PAGE == "New Document" else 1].split("/")[-1]
             source_path = False
@@ -1014,20 +1220,23 @@ class CompareThread(QThread):  # 比较线程，执行核心比较功能
             with TemporaryDirectory() as temp_dir:
                 self.logMessage.emit(f"Temporary directory created: {temp_dir}")
                 image_files = []
-                stats_filename = path.join(temp_dir, "stats.pdf")
-                image_files.append(stats_filename)
 
+                # Processing Loop
                 for i in range(total_operations):
                     self.logMessage.emit(f"Processing page {i + 1} of {total_operations}...")
+
                     self.logMessage.emit(f"Converting main page...")
                     image1 = self.pdf_to_image(i, doc1)
+
                     self.logMessage.emit(f"Converting secondary page...")
                     image2 = self.pdf_to_image(i, doc2)
+
                     self.logMessage.emit(f"Marking differences...")
                     markups = self.mark_differences(i, image1, image2)
+
                     del image1, image2
 
-                    # Save marked images and prepare TOC entries
+                    # Save images
                     self.logMessage.emit(f"Saving output files...")
                     for j, image in enumerate(markups):
                         if self.OUTPUT_GS is True:
@@ -1036,6 +1245,7 @@ class CompareThread(QThread):  # 比较线程，执行核心比较功能
                             image = image.convert("1")
                         else:
                             image = image.convert("RGB")
+
                         image_file = path.join(temp_dir, f"{i}_{j}.pdf")
                         image.save(image_file, resolution=self.DPI_LEVEL, author="MAXFIELD",
                                    optimize=self.REDUCE_FILESIZE)
@@ -1046,29 +1256,32 @@ class CompareThread(QThread):  # 比较线程，执行核心比较功能
                     current_progress += progress_per_operation
                     self.progressUpdated.emit(int(current_progress))
 
-                # Create statistics page
+                # Create Stats Page
                 text = f"Document Comparison Report\n\nTotal Pages: {total_operations}\nFiles Compared:\n    File in Blue_{files[0]}\n    File in Red_{files[1]}\nMain Page: {self.statistics['MAIN_PAGE']}\nTotal Differences: {self.statistics['TOTAL_DIFFERENCES']}\nPages with differences:\n"
                 for page_info in self.statistics["PAGES_WITH_DIFFERENCES"]:
                     text += f"    Page {page_info[0] + 1} Changes: {page_info[1]}\n"
 
-                # Create statistics page and handle text overflow
                 stats_doc = fitz.open()
                 stats_page = stats_doc.new_page()
                 text_blocks = text.split('\n')
                 y_position = 72
                 for line in text_blocks:
                     if y_position > fitz.paper_size('letter')[1] - 72:
-                        stats_page = stats_doc.new_page()  # Create a new page if needed
-                        y_position = 72  # Reset y position for the new page
+                        stats_page = stats_doc.new_page()
+                        y_position = 72
                     stats_page.insert_text((72, y_position), line, fontsize=11, fontname="helv")
-                    y_position += 12  # Adjust y_position by the line height
+                    y_position += 12
 
-                # Save and close the stats document
                 stats_filename = path.join(temp_dir, "stats.pdf")
                 stats_doc.save(stats_filename)
                 stats_doc.close()
 
-                # Builds final PDF from each PDF image page
+                # 插入统计页到最前面 (或按原逻辑处理)
+                # 原逻辑似乎是在image_files列表最前面加入了stats_filename，但这里是在循环后生成的
+                # 我们把它加到列表最前面
+                image_files.insert(0, stats_filename)
+
+                # Compiling PDF
                 self.logMessage.emit("Compiling PDF from output folder...")
                 compiled_pdf = fitz.open()
                 for img_path in image_files:
@@ -1076,18 +1289,16 @@ class CompareThread(QThread):  # 比较线程，执行核心比较功能
                     compiled_pdf.insert_pdf(img, links=False)
                     img.close()
 
-                # Update the table of contents
                 compiled_pdf.set_toc(toc)
 
-                # Save Final PDF File
                 self.logMessage.emit(f"Saving final PDF...")
                 output_path = f"{self.OUTPUT_PATH}{filename.split('.')[0]} Comparison.pdf"
                 output_iterator = 0
 
-                # Checks if a version alreaday exists and increments revision if necessary
                 while path.exists(output_path):
                     output_iterator += 1
                     output_path = f"{self.OUTPUT_PATH}{filename.split('.')[0]} Comparison Rev {output_iterator}.pdf"
+
                 compiled_pdf.save(output_path)
                 compiled_pdf.close()
 
@@ -1099,15 +1310,18 @@ class CompareThread(QThread):  # 比较线程，执行核心比较功能
         return output_path
 
 
-def save_settings(settings: dict) -> None:  # 保存设置到JSON文件
-    settings_path = "settings.json"
+# =================================================================================
+# 辅助函数与入口 (保持原样)
+# =================================================================================
 
+def save_settings(settings: dict) -> None:
+    settings_path = "settings.json"
     if settings_path:
         with open(settings_path, "w") as f:
             dump(settings, f, indent=4)
 
 
-def load_settings() -> dict:  # 从JSON文件加载设置
+def load_settings() -> dict:
     settings = None
     settings_path = "settings.json"
 
@@ -1120,7 +1334,7 @@ def load_settings() -> dict:  # 从JSON文件加载设置
     return settings
 
 
-def _load_default_settings() -> dict:  # 加载默认设置
+def _load_default_settings() -> dict:
     default_settings = {
         "PAGE_SIZES": {
             "AUTO": [None, None],

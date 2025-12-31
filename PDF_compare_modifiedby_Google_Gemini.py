@@ -784,7 +784,7 @@ class MainWindow(QMainWindow):
 
 
 # =================================================================================
-# 核心修改区域：CompareThread (区域特征增强版)
+# 核心修改区域：CompareThread (区域特征增强版 + 抗噪优化)
 # =================================================================================
 
 class CompareThread(QThread):
@@ -835,6 +835,7 @@ class CompareThread(QThread):
         """ 全局对齐，用于修正整体的旋转或位移 """
         gray1 = cv2.cvtColor(img1_cv, cv2.COLOR_BGR2GRAY)
         gray2 = cv2.cvtColor(img2_cv, cv2.COLOR_BGR2GRAY)
+        height, width = gray1.shape
 
         max_features = 5000
         orb = cv2.ORB_create(max_features)
@@ -848,6 +849,8 @@ class CompareThread(QThread):
         matches = matcher.match(descriptors1, descriptors2, None)
         matches.sort(key=lambda x: x.distance, reverse=False)
         num_good_matches = int(len(matches) * 0.15)
+        # 确保有足够的匹配点
+        num_good_matches = max(10, num_good_matches)
         matches = matches[:num_good_matches]
 
         if len(matches) < 10:
@@ -864,40 +867,46 @@ class CompareThread(QThread):
         if h is None:
             return img2_cv
 
-        height, width, channels = img1_cv.shape
         aligned_img = cv2.warpPerspective(img2_cv, h, (width, height))
         return aligned_img
 
     def get_content_regions(self, img_bgr) -> List[Tuple[int, int, int, int]]:
         """
         基于形态学，分离出非白色背景的独立区域（ROI）
-        返回: List of (x, y, w, h)
+        优化策略：减小膨胀力度，防止整页合并
         """
         gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
 
         # 1. 二值化 (反转，内容变白，背景变黑)
-        # 假设背景是白色，阈值250以上算背景
         _, thresh = cv2.threshold(gray, 250, 255, cv2.THRESH_BINARY_INV)
 
         # 2. 形态学膨胀 (连接相邻文字成块)
-        # 横向膨胀力度大一些，纵向小一些，适合文本行
-        # 根据 DPI 动态调整核大小
+        # 优化策略：大幅减小垂直方向的膨胀，避免不同段落粘连
         h_k = max(5, int(self.DPI_LEVEL / 20))
-        v_k = max(2, int(self.DPI_LEVEL / 60))
+        v_k = max(1, int(self.DPI_LEVEL / 100))  # 垂直核改小，防止行间距小的段落合并
         kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (h_k, v_k))
 
-        dilated = cv2.dilate(thresh, kernel, iterations=3)
+        # 减少迭代次数，避免过度融合
+        dilated = cv2.dilate(thresh, kernel, iterations=2)
 
         # 3. 查找轮廓
         contours, hierarchy = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
         regions = []
-        min_w = int(self.DPI_LEVEL / 10)  # 过滤太小的噪点
-        min_h = int(self.DPI_LEVEL / 10)
+        min_w = int(self.DPI_LEVEL / 10)
+        min_h = int(self.DPI_LEVEL / 20)
+
+        img_h, img_w = gray.shape
+        page_area = img_h * img_w
 
         for cnt in contours:
             x, y, w, h = cv2.boundingRect(cnt)
+            # 过滤太小的噪点
             if w > min_w and h > min_h:
+                # 策略优化：如果单个区域占比过大（>90%），说明形态学参数对于该文档太激进（或文档就是一张大图），
+                # 这种情况下通常不需要拆分，但也意味着局部匹配可能会变慢。
+                # 但为了避免把整页当成一个差异块（如果局部有微小差异），
+                # 我们其实依赖下面的 Gaussian Blur 和 Morphology Open 来容错。
                 regions.append((x, y, w, h))
 
         # 从上到下排序
@@ -907,35 +916,27 @@ class CompareThread(QThread):
     def add_visualization_legend(self, image: Image.Image) -> Image.Image:
         """
         在图片顶部添加图例说明
-        [ 蓝色框: 新增 ] [ 红色框: 删除 ] [ 橙色框: 修改 ]
         """
         w, h = image.size
-        # 增加高度以容纳图例
         legend_height = max(60, int(h * 0.05))
 
-        # 创建一个白条放在顶部
         new_img = Image.new("RGB", (w, h + legend_height), (255, 255, 255))
         new_img.paste(image, (0, legend_height))
 
         draw = ImageDraw.Draw(new_img)
 
-        # 动态字体大小
         font_size = max(12, int(w / 80))
-        # 尝试加载默认字体，如果不可用则忽略
         try:
-            # Linux/Windows通用尝试
             font = ImageFont.truetype("arial.ttf", font_size)
         except:
             font = ImageFont.load_default()
 
-        # 定义图例项
         items = [
             ("New/Added", "blue", (200, 220, 255)),
             ("Old/Removed", "red", (255, 200, 200)),
             ("Modified/Typos", "orange", None)
         ]
 
-        # 1. 计算每个图例项的宽度
         box_size = int(font_size * 1.5)
         padding = 10
         item_spacing = 30
@@ -943,20 +944,16 @@ class CompareThread(QThread):
         item_widths = []
         for text, color, fill in items:
             try:
-                # Pillow >= 9.2.0
                 text_w = draw.textlength(text, font=font)
             except:
-                # Fallback estimate
                 text_w = len(text) * font_size * 0.6
 
             total_item_w = box_size + padding + text_w
             item_widths.append(total_item_w)
 
-        # 2. 计算总宽度并确定起始位置 (居中)
         total_legend_width = sum(item_widths) + (len(items) - 1) * item_spacing
 
         start_x = (w - total_legend_width) // 2
-        # 如果图例太宽超出页面，则靠左对齐 (至少保留10px边距)
         if start_x < 10:
             start_x = 10
 
@@ -965,19 +962,14 @@ class CompareThread(QThread):
 
         current_x = start_x
 
-        # 3. 绘制
         for i, (text, color, fill_color) in enumerate(items):
-            # Draw Box
             if fill_color:
                 draw.rectangle([current_x, box_top, current_x + box_size, box_top + box_size], outline=color,
                                fill=fill_color, width=2)
             else:
                 draw.rectangle([current_x, box_top, current_x + box_size, box_top + box_size], outline=color, width=2)
 
-            # Draw Text
             draw.text((current_x + box_size + padding, box_top - 2), text, fill="black", font=font)
-
-            # Move to next
             current_x += item_widths[i] + item_spacing
 
         return new_img
@@ -985,13 +977,14 @@ class CompareThread(QThread):
     def mark_differences(self, page_num: int, image1_pil: Image.Image, image2_pil: Image.Image) -> List[Image.Image]:
         """
         区域特征对比算法 (Region-based Feature Comparison)
+        优化：加入高斯模糊预处理和形态学开运算去噪
         """
 
         # 转 OpenCV 格式
         img1_cv = cv2.cvtColor(np.array(image1_pil), cv2.COLOR_RGB2BGR)
         img2_cv = cv2.cvtColor(np.array(image2_pil), cv2.COLOR_RGB2BGR)
 
-        # 0. 全局粗对其 (Pre-alignment)
+        # 0. 全局粗对其
         if img1_cv.shape == img2_cv.shape:
             try:
                 img2_cv = self.align_images_global(img1_cv, img2_cv)
@@ -1000,8 +993,7 @@ class CompareThread(QThread):
 
         # 准备画布
         diff_canvas = np.ones_like(img1_cv) * 255  # 白底差异图
-        overlay_canvas_r = np.array(image1_pil.convert("L"))  # 红色通道(新内容/差异)
-        overlay_canvas_gb = np.array(image1_pil.convert("L"))  # 青色通道(旧内容/基准)
+        overlay_canvas_r = np.array(image1_pil.convert("L"))
 
         # 标记用的图层
         markup_layer = Image.new('RGBA', image1_pil.size, (0, 0, 0, 0))
@@ -1010,45 +1002,46 @@ class CompareThread(QThread):
         # 1. 提取 Page 1 (基准) 的内容区域
         regions1 = self.get_content_regions(img1_cv)
 
-        # 用于记录 Page 2 哪些像素已经被匹配过了
         page2_matched_mask = np.zeros(img2_cv.shape[:2], dtype=np.uint8)
 
         gray1 = cv2.cvtColor(img1_cv, cv2.COLOR_BGR2GRAY)
         gray2 = cv2.cvtColor(img2_cv, cv2.COLOR_BGR2GRAY)
 
+        # === 核心优化：高斯模糊抗噪 ===
+        # 模糊处理以减少高频噪点（抗锯齿、微小位移导致的假阳性）
+        # 必须使用奇数核
+        blur_k = 3
+        gray1_blur = cv2.GaussianBlur(gray1, (blur_k, blur_k), 0)
+        gray2_blur = cv2.GaussianBlur(gray2, (blur_k, blur_k), 0)
+
         total_differences = 0
 
         # 2. 遍历 Page 1 的区域，去 Page 2 找朋友
         for (x1, y1, w1, h1) in regions1:
-            # 提取 ROI 模板
-            template = gray1[y1:y1 + h1, x1:x1 + w1]
+            # 使用模糊后的图做模板匹配
+            template = gray1_blur[y1:y1 + h1, x1:x1 + w1]
 
-            # 定义搜索范围 (Search Window)
-            # 假设内容可能上下移动，但水平移动不会太大
-            # 垂直搜索范围：上下各 30% 页面高度
+            # 定义搜索范围
             search_h_margin = int(img1_cv.shape[0] * 0.3)
-            search_w_margin = int(img1_cv.shape[1] * 0.1)  # 水平 10%
+            search_w_margin = int(img1_cv.shape[1] * 0.1)
 
             y_search_start = max(0, y1 - search_h_margin)
             y_search_end = min(img1_cv.shape[0], y1 + h1 + search_h_margin)
             x_search_start = max(0, x1 - search_w_margin)
             x_search_end = min(img1_cv.shape[1], x1 + w1 + search_w_margin)
 
-            # 搜索区域
-            search_region = gray2[y_search_start:y_search_end, x_search_start:x_search_end]
+            search_region = gray2_blur[y_search_start:y_search_end, x_search_start:x_search_end]
 
             match_found = False
-            best_match_rect = None  # (x, y, w, h) in Page 2 global coords
+            best_match_rect = None
 
-            # 只有当搜索区域比模板大时才能搜索
             if search_region.shape[0] > h1 and search_region.shape[1] > w1:
                 res = cv2.matchTemplate(search_region, template, cv2.TM_CCOEFF_NORMED)
                 min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(res)
 
-                # 相似度阈值 (0.6 比较宽松，因为可能有文字修改)
+                # 相似度阈值
                 if max_val > 0.6:
                     match_found = True
-                    # 计算在 Page 2 的全局坐标
                     match_x = x_search_start + max_loc[0]
                     match_y = y_search_start + max_loc[1]
                     best_match_rect = (match_x, match_y, w1, h1)
@@ -1056,102 +1049,82 @@ class CompareThread(QThread):
             if match_found and best_match_rect:
                 mx, my, mw, mh = best_match_rect
 
-                # 标记该区域已在 Page 2 被认领
                 cv2.rectangle(page2_matched_mask, (mx, my), (mx + mw, my + mh), 255, -1)
 
                 # --- 局部精确对比 ---
-                roi2 = gray2[my:my + mh, mx:mx + mw]
+                # 使用模糊后的图像计算差值，忽略微小抖动
+                roi2_blur = gray2_blur[my:my + mh, mx:mx + mw]
 
                 # 计算差异
-                local_diff = cv2.absdiff(template, roi2)
+                local_diff = cv2.absdiff(template, roi2_blur)
                 _, local_thresh = cv2.threshold(local_diff, self.THRESHOLD, 255, cv2.THRESH_BINARY)
+
+                # === 核心优化：形态学开运算去噪 ===
+                # 去除孤立的噪点（如1-2像素的对齐误差）
+                kernel_noise = np.ones((3, 3), np.uint8)
+                local_thresh = cv2.morphologyEx(local_thresh, cv2.MORPH_OPEN, kernel_noise)
 
                 # 统计差异像素
                 diff_pixels = cv2.countNonZero(local_thresh)
 
-                # 如果差异较多，说明内容有修改 (Typo / Modification)
-                if diff_pixels > 50:  # 噪点过滤
-                    # 在差异图上画出来
-                    # Page 1 位置画红色 (旧内容)
+                if diff_pixels > 50:
+                    # 绘制差异
                     diff_canvas[y1:y1 + h1, x1:x1 + w1][local_thresh > 0] = [0, 0, 255]
-                    # Page 2 位置画蓝色 (新内容) - 可选，为了不混乱，我们通常画在 Page 1 对应位置
-                    # 或者我们可以将 Page 2 的差异也映射回 Page 1 的坐标系显示
 
-                    # 在 Markup 层画黄框 (表示位置找到了，但有修改)
-                    # 查找具体的差异轮廓
                     l_cnts, _ = cv2.findContours(local_thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
                     for lc in l_cnts:
-                        if cv2.contourArea(lc) > 20:  # 忽略微小噪点
+                        if cv2.contourArea(lc) > 20:
                             lx, ly, lw, lh = cv2.boundingRect(lc)
-                            # 映射回 Page 1 坐标
                             draw.rectangle([x1 + lx, y1 + ly, x1 + lx + lw, y1 + ly + lh], outline="orange", width=2)
                             total_differences += 1
 
-                # 更新 Overlay 画布 (将 Page 2 的匹配内容搬运到 Page 1 的位置来做叠图)
-                # 这样即使段落错行，叠图也是重合的！
-                overlay_canvas_r[y1:y1 + h1, x1:x1 + w1] = roi2
+                # 为了Overlay清晰，这里使用未模糊的原始图像数据
+                roi2_raw = gray2[my:my + mh, mx:mx + mw]
+                overlay_canvas_r[y1:y1 + h1, x1:x1 + w1] = roi2_raw
 
             else:
-                # 没找到匹配 -> 这是一个被删除的段落 (Deleted Block)
-                # 在 Markup 画红框
+                # 没找到匹配 -> 删除
                 draw.rectangle([x1, y1, x1 + w1, y1 + h1], outline="red", width=3, fill=(255, 0, 0, 50))
                 diff_canvas[y1:y1 + h1, x1:x1 + w1] = [0, 0, 255]  # 涂红
                 total_differences += 1
 
-        # 3. 检查 Page 2 中“未被访问”的区域 -> 新增内容 (Inserted Content)
-        # 获取 Page 2 的所有内容区域
+        # 3. 检查 Page 2 新增内容
         regions2 = self.get_content_regions(img2_cv)
 
         for (x2, y2, w2, h2) in regions2:
-            # 检查这个区域的中心点是否已经被 mask 覆盖
             cx, cy = x2 + w2 // 2, y2 + h2 // 2
             if page2_matched_mask[cy, cx] == 0:
-                # 这是一个新增区域
-                # 在 Markup 画蓝框
-                # 注意：这是 Page 2 的坐标，我们需要画在 Page 1 的图上
-                # 如果是纯新增，可能覆盖在 Page 1 的空白处，或者与其他内容重叠
+                # 新增区域
                 draw.rectangle([x2, y2, x2 + w2, y2 + h2], outline="blue", width=3, fill=(0, 0, 255, 50))
 
-                # 在差异图上画蓝
-                # 注意边界检查
                 if y2 + h2 < diff_canvas.shape[0] and x2 + w2 < diff_canvas.shape[1]:
-                    # 获取该区域的 mask
-                    roi_gray2 = gray2[y2:y2 + h2, x2:x2 + w2]
+                    # 使用模糊后的图计算mask，避免噪点
+                    roi_gray2 = gray2_blur[y2:y2 + h2, x2:x2 + w2]
                     _, roi_mask = cv2.threshold(roi_gray2, 250, 255, cv2.THRESH_BINARY_INV)
+                    # 同样开运算
+                    roi_mask = cv2.morphologyEx(roi_mask, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
+
                     diff_canvas[y2:y2 + h2, x2:x2 + w2][roi_mask > 0] = [255, 0, 0]
 
-                # 在 Overlay 的红色通道显示新增内容
                 if y2 + h2 < overlay_canvas_r.shape[0] and x2 + w2 < overlay_canvas_r.shape[1]:
-                    # 这里比较暴力，直接覆盖，可能会遮挡 Page 1 的内容
-                    # 但既然是新增的，那个位置在 Page 1 通常是空白
-                    pass
-                    # 为了 Overlay 效果，我们其实不需要动 overlay_canvas_r 对应位置，
-                    # 因为它初始化就是 Page 1。
-                    # 我们需要让这部分变红。
-                    # Overlay 逻辑： R通道=Page2(Aligned), GB通道=Page1
-                    # 对于新增块，Page2 有字(黑)，Page1 无字(白) -> R=0, GB=255 -> Cyan (青色)
-                    # 等等，之前的逻辑是红青互补。
-                    # 我们需要把 Page 2 的这个新增块，贴到 overlay_canvas_r 上
+                    # 使用原始图像
                     overlay_canvas_r[y2:y2 + h2, x2:x2 + w2] = gray2[y2:y2 + h2, x2:x2 + w2]
 
                 total_differences += 1
 
         # 4. 生成最终图片
         markup_image = Image.alpha_composite(image1_pil.convert("RGBA"), markup_layer)
-        markup_image = self.add_visualization_legend(markup_image)  # Add Legend
+        markup_image = self.add_visualization_legend(markup_image)
 
-        # Overlay 合成: R=Page2(Reconstructed), GB=Page1
         overlay_image = Image.merge("RGB", (
         Image.fromarray(overlay_canvas_r), image1_pil.convert("L"), image1_pil.convert("L")))
 
         diff_image = Image.fromarray(cv2.cvtColor(diff_canvas.astype(np.uint8), cv2.COLOR_BGR2RGB))
 
-        # 统计
         if total_differences > 0:
             self.statistics["TOTAL_DIFFERENCES"] += total_differences
             self.statistics["PAGES_WITH_DIFFERENCES"].append((page_num, total_differences))
 
-        # 输出打包
         output = []
         target_size = (int(self.PAGE_SIZE[0] * self.DPI_LEVEL), int(self.PAGE_SIZE[1] * self.DPI_LEVEL))
 
@@ -1202,7 +1175,6 @@ class CompareThread(QThread):
             size = doc1.load_page(0).rect
             if self.PAGE_SIZE[0] is None:
                 self.PAGE_SIZE = (size.width / 72, size.height / 72)
-                # 重新计算 kernel
                 self.STRUCTURAL_MERGE_KERNEL = max(3, int(self.DPI_LEVEL / 25))
 
             self.statistics["MAIN_PAGE"] = files[0 if self.MAIN_PAGE == "New Document" else 1]
@@ -1221,7 +1193,6 @@ class CompareThread(QThread):
                 self.logMessage.emit(f"Temporary directory created: {temp_dir}")
                 image_files = []
 
-                # Processing Loop
                 for i in range(total_operations):
                     self.logMessage.emit(f"Processing page {i + 1} of {total_operations}...")
 
@@ -1236,7 +1207,6 @@ class CompareThread(QThread):
 
                     del image1, image2
 
-                    # Save images
                     self.logMessage.emit(f"Saving output files...")
                     for j, image in enumerate(markups):
                         if self.OUTPUT_GS is True:
@@ -1256,7 +1226,6 @@ class CompareThread(QThread):
                     current_progress += progress_per_operation
                     self.progressUpdated.emit(int(current_progress))
 
-                # Create Stats Page
                 text = f"Document Comparison Report\n\nTotal Pages: {total_operations}\nFiles Compared:\n    File in Blue_{files[0]}\n    File in Red_{files[1]}\nMain Page: {self.statistics['MAIN_PAGE']}\nTotal Differences: {self.statistics['TOTAL_DIFFERENCES']}\nPages with differences:\n"
                 for page_info in self.statistics["PAGES_WITH_DIFFERENCES"]:
                     text += f"    Page {page_info[0] + 1} Changes: {page_info[1]}\n"
@@ -1276,12 +1245,8 @@ class CompareThread(QThread):
                 stats_doc.save(stats_filename)
                 stats_doc.close()
 
-                # 插入统计页到最前面 (或按原逻辑处理)
-                # 原逻辑似乎是在image_files列表最前面加入了stats_filename，但这里是在循环后生成的
-                # 我们把它加到列表最前面
                 image_files.insert(0, stats_filename)
 
-                # Compiling PDF
                 self.logMessage.emit("Compiling PDF from output folder...")
                 compiled_pdf = fitz.open()
                 for img_path in image_files:

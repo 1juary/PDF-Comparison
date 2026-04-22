@@ -1,4 +1,5 @@
 import re
+import sys
 from difflib import SequenceMatcher
 from json import dump, load
 from os import path
@@ -563,7 +564,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("Maxfield Auto Markup")
         self.setGeometry(100, 100, 500, 300)
-        self.setWindowIcon(QIcon("app_icon.png"))
+        self.setWindowIcon(QIcon(resource_path("icon.ico")))
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint)
 
         self.title_bar = CustomTitleBar(self)
@@ -1044,6 +1045,12 @@ def save_settings(settings: dict) -> None:
     settings_path = "settings.json"
     with open(settings_path, "w", encoding="utf-8") as file:
         dump(settings, file, indent=4)
+
+
+def resource_path(relative_path: str) -> str:
+    if hasattr(sys, "_MEIPASS"):
+        return path.join(sys._MEIPASS, relative_path)
+    return path.join(path.dirname(path.abspath(__file__)), relative_path)
 
 
 def _load_default_settings() -> dict:

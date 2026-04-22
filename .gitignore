@@ -1,0 +1,50 @@
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# PyInstaller / packaging outputs
+build/
+dist/
+*.spec
+
+# Logs and temporary files
+*.log
+*.tmp
+*.temp
+*.bak
+*.swp
+
+# OS metadata
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Large generated artifacts
+*.exe
+*.dll
+*.so
+*.dylib
+*.zip
+*.7z
+*.rar
+*.tar
+*.gz
+*.bz2
+*.xz
+
+# Project runtime data
+settings.json

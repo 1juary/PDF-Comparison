@@ -732,23 +732,33 @@ class CompareThread(QThread):
         tokens = []
         for page_num in range(doc.page_count):
             page = doc.load_page(page_num)
-            words = page.get_text("words")
-            words.sort(key=lambda word: (word[5], word[6], word[7], word[1], word[0]))
-            for word in words:
-                raw = (word[4] or "").strip()
-                if not raw:
+            text_dict = page.get_text("dict")
+            for block_index, block in enumerate(text_dict.get("blocks", [])):
+                if block.get("type") != 0:
                     continue
-                norm = self._normalize_text(raw)
-                if len(norm) < self.TEXT_MIN_DIFF_LENGTH:
-                    continue
-                tokens.append(
-                    {
-                        "text": raw,
-                        "norm": norm,
-                        "page": page_num,
-                        "rect": fitz.Rect(word[0], word[1], word[2], word[3]),
-                    }
-                )
+
+                for line_index, line in enumerate(block.get("lines", [])):
+                    for span_index, span in enumerate(line.get("spans", [])):
+                        raw = (span.get("text") or "").strip()
+                        if not raw:
+                            continue
+
+                        norm = self._normalize_text(raw)
+                        if len(norm) < self.TEXT_MIN_DIFF_LENGTH:
+                            continue
+
+                        bbox = span.get("bbox") or (0, 0, 0, 0)
+                        tokens.append(
+                            {
+                                "text": raw,
+                                "norm": norm,
+                                "page": page_num,
+                                "rect": fitz.Rect(bbox),
+                                "block": block_index,
+                                "line": line_index,
+                                "span": span_index,
+                            }
+                        )
         return tokens
 
     @staticmethod
@@ -918,41 +928,117 @@ class CompareThread(QThread):
         other = other.resize(base.size)
         return Image.blend(base, other, 0.5)
 
+    @staticmethod
+    def _wrap_text_to_width(text: str, max_width: float, font_size: int = 10, font_name: str = "helv") -> List[str]:
+        if not text:
+            return [""]
+
+        lines = []
+        current_line = ""
+
+        for segment in re.split(r"(\s+)", text):
+            candidate = current_line + segment
+            if current_line and fitz.get_text_length(candidate, fontname=font_name, fontsize=font_size) > max_width:
+                lines.append(current_line.rstrip())
+                current_line = segment.lstrip()
+                continue
+
+            if not current_line and fitz.get_text_length(segment, fontname=font_name, fontsize=font_size) > max_width:
+                buffer = ""
+                for char in segment:
+                    if fitz.get_text_length(buffer + char, fontname=font_name, fontsize=font_size) > max_width:
+                        if buffer:
+                            lines.append(buffer)
+                        buffer = char
+                    else:
+                        buffer += char
+                current_line = buffer
+                continue
+
+            current_line = candidate
+
+        if current_line.strip():
+            lines.append(current_line.rstrip())
+
+        return lines or [""]
+
+    def _write_wrapped_lines(
+        self,
+        page: fitz.Page,
+        lines: List[str],
+        x: float,
+        y: float,
+        page_width: float,
+        page_height: float,
+        font_size: int = 10,
+        font_name: str = "helv",
+        line_gap: float = 4.0,
+    ) -> float:
+        right_margin = 72
+        bottom_margin = 72
+        usable_width = page_width - x - right_margin
+        cursor_y = y
+
+        for raw_line in lines:
+            wrapped_lines = self._wrap_text_to_width(raw_line, usable_width, font_size=font_size, font_name=font_name)
+            for wrapped_line in wrapped_lines:
+                if cursor_y > page_height - bottom_margin:
+                    return cursor_y
+                page.insert_text((x, cursor_y), wrapped_line, fontsize=font_size, fontname=font_name)
+                cursor_y += font_size + line_gap
+
+        return cursor_y
+
     def _create_summary_pdf(self, temp_dir: str, diff_entries: List[Dict], old_file: str, new_file: str) -> str:
         report_doc = fitz.open()
         page = report_doc.new_page()
         y = 72
-        line_height = 14
-        bottom_limit = fitz.paper_size("letter")[1] - 72
+        page_width = page.rect.width
+        page_height = page.rect.height
+        font_size = 10
+        line_gap = 4.0
+        left_margin = 72
+        bottom_margin = 72
+        usable_width = page_width - left_margin - 72
 
         lines = [
-            "Document Comparison Report",
+            "文字版差异汇总",
             "",
-            f"Old Document: {old_file}",
-            f"New Document: {new_file}",
-            f"Total Differences: {self.statistics['TOTAL_DIFFERENCES']}",
-            f"Deleted Segments: {self.statistics['DELETED_COUNT']}",
-            f"Added Segments: {self.statistics['ADDED_COUNT']}",
+            f"原始文件：{old_file}",
+            f"对比文件：{new_file}",
+            f"总差异数：{self.statistics['TOTAL_DIFFERENCES']}",
+            f"删除内容：{self.statistics['DELETED_COUNT']}",
+            f"新增内容：{self.statistics['ADDED_COUNT']}",
             "",
-            "Structured Diff Summary:",
+            "差异明细：",
             "",
         ]
 
-        for index, item in enumerate(diff_entries, start=1):
+        for item in diff_entries:
             old_page = f"p{item['old_page']}" if isinstance(item['old_page'], int) else item['old_page']
             new_page = f"p{item['new_page']}" if isinstance(item['new_page'], int) else item['new_page']
-            lines.append(f"[{index}] 原文档描述: {item['old_desc']}")
-            lines.append(f"    原文档页数: {old_page}")
-            lines.append(f"    新文档描述: {item['new_desc']}")
-            lines.append(f"    新文档页数: {new_page}")
+            lines.append(f"原文档描述：{item['old_desc']}")
+            lines.append(f"原文档页数：{old_page}")
+            lines.append(f"新文档描述：{item['new_desc']}")
+            lines.append(f"新文档页数：{new_page}")
             lines.append("")
 
-        for line in lines:
-            if y > bottom_limit:
+        for raw_line in lines:
+            wrapped_lines = self._wrap_text_to_width(raw_line, usable_width, font_size=font_size, font_name="helv")
+            for wrapped_line in wrapped_lines:
+                if y > page_height - bottom_margin:
+                    page = report_doc.new_page()
+                    page_width = page.rect.width
+                    page_height = page.rect.height
+                    usable_width = page_width - left_margin - 72
+                    y = 72
+
+                page.insert_text((left_margin, y), wrapped_line, fontsize=font_size, fontname="helv")
+                y += font_size + line_gap
+
+        if y > page_height - bottom_margin:
                 page = report_doc.new_page()
                 y = 72
-            page.insert_text((72, y), line, fontsize=10, fontname="helv")
-            y += line_height
 
         report_file = path.join(temp_dir, "diff_summary.pdf")
         report_doc.save(report_file)

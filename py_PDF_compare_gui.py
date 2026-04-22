@@ -1,5 +1,4 @@
 import re
-from difflib import SequenceMatcher
 from json import dump, load
 from os import path
 from tempfile import TemporaryDirectory
@@ -7,6 +6,7 @@ from time import sleep
 from typing import Dict, List, Optional, Tuple
 
 import fitz
+from diff_match_patch import diff_match_patch
 from PIL import Image, ImageDraw
 from PySide6.QtCore import QThread, Signal, Slot, Qt
 from PySide6.QtGui import QIcon
@@ -767,25 +767,85 @@ class CompareThread(QThread):
             rect_map.setdefault(token["page"], []).append(token["rect"])
         return rect_map
 
+    @staticmethod
+    def _tokens_to_line_text(tokens: List[Dict]) -> str:
+        return "\n".join(token["norm"] for token in tokens)
+
+    @staticmethod
+    def _consume_token_slice(tokens: List[Dict], start_index: int, line_count: int) -> List[Dict]:
+        if line_count <= 0:
+            return []
+        return tokens[start_index:start_index + line_count]
+
     def _build_diff_entries(self, old_tokens: List[Dict], new_tokens: List[Dict]) -> List[Dict]:
-        old_norm = [token["norm"] for token in old_tokens]
-        new_norm = [token["norm"] for token in new_tokens]
-        matcher = SequenceMatcher(None, old_norm, new_norm, autojunk=False)
+        old_text = self._tokens_to_line_text(old_tokens)
+        new_text = self._tokens_to_line_text(new_tokens)
+
+        matcher = diff_match_patch()
+        old_chars, new_chars, line_array = matcher.diff_linesToChars(old_text, new_text)
+        diffs = matcher.diff_main(old_chars, new_chars, False)
+        matcher.diff_charsToLines(diffs, line_array)
+        matcher.diff_cleanupSemantic(diffs)
+        matcher.diff_cleanupEfficiency(diffs)
 
         entries = []
-        for opcode, i1, i2, j1, j2 in matcher.get_opcodes():
-            if opcode == "equal":
+        old_cursor = 0
+        new_cursor = 0
+        pending_deletes: List[List[Dict]] = []
+
+        def flush_pending_deletes() -> None:
+            if not pending_deletes:
+                return
+
+            merged_tokens = [token for chunk in pending_deletes for token in chunk]
+            entries.append(
+                {
+                    "type": "delete",
+                    "old_desc": self._tokens_to_text(merged_tokens),
+                    "old_page": (merged_tokens[0]["page"] + 1) if merged_tokens else "无",
+                    "new_desc": "无",
+                    "new_page": "无",
+                    "old_rects": self._group_rects_by_page(merged_tokens),
+                    "new_rects": {},
+                }
+            )
+            pending_deletes.clear()
+
+        for opcode, diff_text in diffs:
+            lines = [line for line in diff_text.splitlines() if line != ""]
+            if not lines:
                 continue
 
-            old_slice = old_tokens[i1:i2]
-            new_slice = new_tokens[j1:j2]
-            old_desc = self._tokens_to_text(old_slice)
+            if opcode == 0:
+                old_cursor += len(lines)
+                new_cursor += len(lines)
+                flush_pending_deletes()
+                continue
+
+            if opcode == -1:
+                old_slice = self._consume_token_slice(old_tokens, old_cursor, len(lines))
+                old_cursor += len(lines)
+                if old_slice:
+                    pending_deletes.append(old_slice)
+                continue
+
+            new_slice = self._consume_token_slice(new_tokens, new_cursor, len(lines))
+            new_cursor += len(lines)
             new_desc = self._tokens_to_text(new_slice)
+
+            if pending_deletes:
+                old_slice = [token for chunk in pending_deletes for token in chunk]
+                old_desc = self._tokens_to_text(old_slice)
+                entry_type = "replace"
+                pending_deletes.clear()
+            else:
+                old_slice = []
+                old_desc = "无"
+                entry_type = "add"
 
             if old_desc == "无" and new_desc == "无":
                 continue
 
-            entry_type = "replace" if opcode == "replace" else ("delete" if opcode == "delete" else "add")
             old_rects = self._group_rects_by_page(old_slice)
             new_rects = self._group_rects_by_page(new_slice)
 
@@ -799,6 +859,8 @@ class CompareThread(QThread):
                 "new_rects": new_rects,
             }
             entries.append(entry)
+
+        flush_pending_deletes()
 
         return entries
 
@@ -877,10 +939,12 @@ class CompareThread(QThread):
         ]
 
         for index, item in enumerate(diff_entries, start=1):
+            old_page = f"p{item['old_page']}" if isinstance(item['old_page'], int) else item['old_page']
+            new_page = f"p{item['new_page']}" if isinstance(item['new_page'], int) else item['new_page']
             lines.append(f"[{index}] 原文档描述: {item['old_desc']}")
-            lines.append(f"    原文档页数: {item['old_page']}")
+            lines.append(f"    原文档页数: {old_page}")
             lines.append(f"    新文档描述: {item['new_desc']}")
-            lines.append(f"    新文档页数: {item['new_page']}")
+            lines.append(f"    新文档页数: {new_page}")
             lines.append("")
 
         for line in lines:

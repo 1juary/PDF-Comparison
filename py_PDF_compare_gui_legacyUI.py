@@ -10,7 +10,7 @@ from typing import Dict, List, Optional, Tuple
 import fitz
 from PIL import Image, ImageDraw
 from PySide6.QtCore import QThread, Signal, Slot, Qt
-from PySide6.QtGui import QColor, QIcon
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -26,7 +26,6 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QProgressBar,
     QPushButton,
-    QGraphicsDropShadowEffect,
     QSizePolicy,
     QSpacerItem,
     QSpinBox,
@@ -36,24 +35,6 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-
-
-PRIMARY_BLUE = "#2D8CF0"
-PRIMARY_BLUE_HOVER = "#1E90FF"
-WINDOW_BG = "#F8FAFC"
-CARD_BG = "#FFFFFF"
-TEXT_PRIMARY = "#1F2937"
-TEXT_SECONDARY = "#6B7280"
-BORDER_LIGHT = "#E5E7EB"
-
-
-def apply_soft_shadow(widget: QWidget, blur_radius: int = 24, y_offset: int = 4, alpha: int = 36) -> None:
-    # Lightweight card shadow to lift white surfaces from the page background.
-    shadow = QGraphicsDropShadowEffect(widget)
-    shadow.setBlurRadius(blur_radius)
-    shadow.setOffset(0, y_offset)
-    shadow.setColor(QColor(15, 23, 42, alpha))
-    widget.setGraphicsEffect(shadow)
 
 
 class AdvancedSettings(QWidget):
@@ -66,7 +47,7 @@ class AdvancedSettings(QWidget):
             "Short differences are usually noise in PDFs. Increase this value to suppress tiny token-level changes."
         )
         self.min_diff_desc.setWordWrap(True)
-        self.min_diff_desc.setStyleSheet(f"color: {TEXT_SECONDARY}; font: 12px 'Segoe UI', sans-serif;")
+        self.min_diff_desc.setStyleSheet("color: black; font: 12px Arial, sans-serif;")
         self.min_diff_spinbox = QSpinBox(self)
         self.min_diff_spinbox.setMinimum(1)
         self.min_diff_spinbox.setMaximum(20)
@@ -88,35 +69,16 @@ class AdvancedSettings(QWidget):
         self.setStyleSheet(
             """
             QLabel {
-                color: #1F2937;
-                font: 14px 'Segoe UI', sans-serif;
+                color: black;
+                font: 14px Arial, sans-serif;
             }
             QSpinBox {
-                color: #1F2937;
-                font: 14px 'Segoe UI', sans-serif;
-                background-color: #FFFFFF;
-                border: 1px solid #E5E7EB;
-                border-radius: 8px;
-                padding: 5px 10px;
+                color: black;
+                font: 14px Arial, sans-serif;
             }
             QCheckBox {
-                color: #1F2937;
-                font: 14px 'Segoe UI', sans-serif;
-                spacing: 8px;
-            }
-            QSpinBox:hover, QSpinBox:focus {
-                border: 1px solid #2D8CF0;
-            }
-            QCheckBox::indicator {
-                width: 16px;
-                height: 16px;
-                border-radius: 5px;
-                border: 1px solid #E5E7EB;
-                background: #FFFFFF;
-            }
-            QCheckBox::indicator:checked {
-                border: 1px solid #2D8CF0;
-                background: #2D8CF0;
+                color: black;
+                font: 14px Arial, sans-serif;
             }
         """
         )
@@ -197,37 +159,25 @@ class DPISettings(QWidget):
         self.setStyleSheet(
             """
             QLabel {
-                color: #1F2937;
-                font: 14px 'Segoe UI', sans-serif;
+                color: black;
+                font: 14px Arial, sans-serif;
             }
             QSpinBox {
-                color: #1F2937;
-                font: 14px 'Segoe UI', sans-serif;
-                background-color: #FFFFFF;
-                border: 1px solid #E5E7EB;
-                border-radius: 8px;
-                padding: 5px 10px;
+                color: black;
+                font: 14px Arial, sans-serif;
             }
             QComboBox {
-                min-height: 34px;
-                border-radius: 8px;
-                background-color: #FFFFFF;
-                border: 1px solid #E5E7EB;
-                color: #1F2937;
-                padding: 0 10px;
+                height: 30px;
+                border-radius: 5px;
+                background-color: #454545;
+                selection-background-color: #ff5e0e;
+                color: white;
             }
             QComboBox QAbstractItemView {
-                background-color: #FFFFFF;
-                color: #1F2937;
-                selection-background-color: #2D8CF0;
-                selection-color: white;
-                border: 1px solid #E5E7EB;
-                border-radius: 8px;
-                padding: 6px;
-            }
-            QSpinBox:hover, QSpinBox:focus,
-            QComboBox:hover, QComboBox:focus {
-                border: 1px solid #2D8CF0;
+                padding: 10px;
+                background-color: #454545;
+                selection-background-color: #ff5e0e;
+                color: white;
             }
         """
         )
@@ -325,12 +275,6 @@ class OutputSettings(QWidget):
         checkboxes_group = QGroupBox()
         other_group = QGroupBox()
 
-        output_path_group.setObjectName("CardGroup")
-        include_images_group.setObjectName("CardGroup")
-        general_group.setObjectName("CardGroup")
-        checkboxes_group.setObjectName("SubCardGroup")
-        other_group.setObjectName("SubCardGroup")
-
         output_path_layout = QFormLayout()
         output_path_layout.addRow(self.output_path_label, self.output_path_combobox)
         output_path_layout.addRow(self.specified_label, self.specified_entry)
@@ -367,87 +311,33 @@ class OutputSettings(QWidget):
         main_layout.addWidget(general_group)
         self.setLayout(main_layout)
 
-        apply_soft_shadow(output_path_group)
-        apply_soft_shadow(include_images_group)
-        apply_soft_shadow(general_group)
-
         self.setStyleSheet(
             """
             QLabel {
-                color: #1F2937;
-                font: 14px 'Segoe UI', sans-serif;
+                color: black;
+                font: 14px Arial, sans-serif;
             }
             QSpinBox {
-                color: #1F2937;
-                font: 14px 'Segoe UI', sans-serif;
+                color: black;
+                font: 14px Arial, sans-serif;
             }
             QComboBox {
-                min-height: 34px;
-                border-radius: 8px;
-                background-color: #FFFFFF;
-                border: 1px solid #E5E7EB;
-                color: #1F2937;
-                padding: 0 10px;
+                height: 30px;
+                border-radius: 5px;
+                background-color: #454545;
+                selection-background-color: #ff5e0e;
+                color: white;
             }
             QComboBox QAbstractItemView {
-                background-color: #FFFFFF;
-                selection-background-color: #2D8CF0;
-                selection-color: white;
-                color: #1F2937;
-                font: 14px 'Segoe UI', sans-serif;
-                border: 1px solid #E5E7EB;
-                border-radius: 8px;
-                padding: 6px;
+                padding: 10px;
+                background-color: #454545;
+                selection-background-color: #ff5e0e;
+                color: white;
+                font: 14px Arial, sans-serif;
             }
             QCheckBox {
-                color: #1F2937;
-                font: 14px 'Segoe UI', sans-serif;
-                spacing: 8px;
-            }
-            QLineEdit {
-                min-height: 34px;
-                border-radius: 8px;
-                background-color: #FFFFFF;
-                border: 1px solid #E5E7EB;
-                color: #1F2937;
-                padding: 0 10px;
-            }
-            QLineEdit:focus,
-            QComboBox:hover,
-            QComboBox:focus {
-                border: 1px solid #2D8CF0;
-            }
-            QCheckBox::indicator {
-                width: 16px;
-                height: 16px;
-                border-radius: 5px;
-                border: 1px solid #E5E7EB;
-                background: #FFFFFF;
-            }
-            QCheckBox::indicator:checked {
-                border: 1px solid #2D8CF0;
-                background: #2D8CF0;
-            }
-            QGroupBox#CardGroup {
-                background-color: #FFFFFF;
-                border: 1px solid #E5E7EB;
-                border-radius: 12px;
-                margin-top: 12px;
-                padding: 12px;
-                font: 600 14px 'Segoe UI', sans-serif;
-                color: #1F2937;
-            }
-            QGroupBox#CardGroup::title {
-                subcontrol-origin: margin;
-                left: 14px;
-                top: -1px;
-                padding: 0 4px;
-            }
-            QGroupBox#SubCardGroup {
-                background-color: #F9FAFB;
-                border: 1px solid #E5E7EB;
-                border-radius: 10px;
-                padding: 10px;
+                color: black;
+                font: 14px Arial, sans-serif;
             }
         """
         )
@@ -510,33 +400,6 @@ class SettingsDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.addWidget(self.tab_widget)
         self.setLayout(layout)
-
-        self.setStyleSheet(
-            """
-            QDialog {
-                background-color: #F8FAFC;
-                color: #1F2937;
-            }
-            QTabWidget::pane {
-                border: 1px solid #E5E7EB;
-                border-radius: 12px;
-                background: transparent;
-                top: -1px;
-            }
-            QTabBar::tab {
-                background: #EAF2FF;
-                color: #1F2937;
-                padding: 8px 14px;
-                border-top-left-radius: 8px;
-                border-top-right-radius: 8px;
-                margin-right: 4px;
-            }
-            QTabBar::tab:selected {
-                background: #2D8CF0;
-                color: white;
-            }
-            """
-        )
 
 
 class CustomTitleBar(QFrame):
@@ -610,16 +473,10 @@ class DragDropLabel(QPushButton):
         self.setStyleSheet(
             """
             QPushButton {
-                color: #2D8CF0;
-                background-color: #EBF5FF;
-                border-radius: 12px;
-                border: 2px dashed #2D8CF0;
-                font: 600 14px 'Segoe UI', sans-serif;
-                padding: 12px;
-                text-align: center;
-            }
-            QPushButton:hover {
-                background-color: #DCEEFF;
+                color: black;
+                background-color: #f7f7f7;
+                border-radius: 10px;
+                border: 2px solid #ff5e0e;
             }
         """
         )
@@ -664,32 +521,29 @@ class ProgressWindow(QMainWindow):
         self.setStyleSheet(
             """
             QMainWindow {
-                background-color: #F8FAFC;
+                background-color: #2b2b2b;
             }
             QTextBrowser {
-                background-color: #FFFFFF;
-                color: #1F2937;
-                border: 1px solid #E5E7EB;
-                border-radius: 10px;
-                padding: 8px;
+                background-color: #323232;
+                color: #c8c8c8;
+                border: 1px solid #ff5e0e;
+                border-radius: 5px;
             }
             QProgressBar {
-                border: 1px solid #E5E7EB;
-                border-radius: 10px;
+                border: 1px solid #ff5e0e;
+                border-radius: 5px;
                 text-align: center;
-                color: #1F2937;
-                background-color: #E5EAF2;
-                min-height: 18px;
+                color: #c8c8c8;
+                background-color: #202020;
             }
             QProgressBar::chunk {
-                background-color: #2D8CF0;
+                background-color: #0075d5;
                 width: 1px;
-                border-radius: 9px;
+                border: 1px solid transparent;
+                border-radius: 5px;
             }
         """
         )
-
-        apply_soft_shadow(self.log_area, blur_radius=18, y_offset=2, alpha=30)
 
     @Slot(int)
     def update_progress(self, progress):
@@ -723,12 +577,11 @@ class MainWindow(QMainWindow):
         self.progress_window: Optional["ProgressWindow"] = None
 
         layout = QVBoxLayout()
-        layout.setContentsMargins(16, 16, 16, 16)
-        layout.setSpacing(14)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(10)
 
         self.drop_label = DragDropLabel(self)
         self.compare_button = QPushButton("Compare", self)
-        self.compare_button.setObjectName("CompareButton")
         self.compare_button.clicked.connect(self.compare)
 
         self.dpi_label = QLabel("DPI:", self)
@@ -745,47 +598,26 @@ class MainWindow(QMainWindow):
         self.page_combo.setCurrentText(self.settings["PAGE_SIZE"])
         self.page_combo.currentTextChanged.connect(self.update_page_size)
 
-        self.upload_card = QFrame(self)
-        self.upload_card.setObjectName("UploadCard")
-        upload_layout = QVBoxLayout(self.upload_card)
-        upload_layout.setContentsMargins(12, 12, 12, 12)
-        upload_layout.addWidget(self.drop_label)
-
-        self.controls_card = QFrame(self)
-        self.controls_card.setObjectName("ControlsCard")
-        controls_layout = QVBoxLayout(self.controls_card)
-        controls_layout.setContentsMargins(16, 16, 16, 16)
-        controls_layout.setSpacing(10)
-        controls_layout.addWidget(self.compare_button)
-        controls_layout.addWidget(self.dpi_label)
-        controls_layout.addWidget(self.dpi_combo)
-        controls_layout.addWidget(self.page_label)
-        controls_layout.addWidget(self.page_combo)
-
-        layout.addWidget(self.upload_card)
-        layout.addWidget(self.controls_card)
+        layout.addWidget(self.drop_label)
+        layout.addWidget(self.compare_button)
+        layout.addWidget(self.dpi_label)
+        layout.addWidget(self.dpi_combo)
+        layout.addWidget(self.page_label)
+        layout.addWidget(self.page_combo)
 
         central_widget = QWidget()
         central_widget.setLayout(layout)
         self.setCentralWidget(central_widget)
-
-        apply_soft_shadow(self.upload_card)
-        apply_soft_shadow(self.controls_card)
         self.set_stylesheet()
 
     def set_stylesheet(self):
         self.drop_label.setStyleSheet(
             """
             QPushButton {
-                color: #2D8CF0;
-                background-color: #EBF5FF;
-                border-radius: 12px;
-                border: 2px dashed #2D8CF0;
-                font: 600 14px 'Segoe UI', sans-serif;
-                padding: 12px;
-            }
-            QPushButton:hover {
-                background-color: #DCEEFF;
+                color: white;
+                background-color: #2D2D2D;
+                border-radius: 10px;
+                border: 2px solid #ff5e0e;
             }
         """
         )
@@ -793,109 +625,30 @@ class MainWindow(QMainWindow):
         self.setStyleSheet(
             """
             QLabel {
-                font: 600 14px 'Segoe UI', sans-serif;
-                color: #1F2937;
-            }
-            QWidget {
-                font-family: 'Segoe UI';
+                font: 14px Arial, sans-serif;
+                color: white;
             }
             QMainWindow {
-                background-color: #F8FAFC;
+                background-color: #2D2D2D;
             }
             #TitleBar {
-                background-color: #FFFFFF;
-                border-bottom: 1px solid #E5E7EB;
-            }
-            #UploadCard, #ControlsCard {
-                background-color: #FFFFFF;
-                border: 1px solid #E5E7EB;
-                border-radius: 12px;
+                background-color: #1f1f1f;
             }
             #SettingsButton {
-                background-color: #EFF6FF;
-                color: #2D8CF0;
-                border: 1px solid #BFDBFE;
-                border-radius: 8px;
-                font: 600 12px 'Segoe UI', sans-serif;
-            }
-            #SettingsButton:hover {
-                background-color: #DBEAFE;
+                background-color: #ff5e0e;
+                color: black;
             }
             #MinimizeButton {
-                background-color: transparent;
-                color: #1F2937;
-                border: 1px solid transparent;
-                border-radius: 6px;
+                background-color: #2b2b2b;
             }
             #CloseButton {
-                background-color: transparent;
-                color: #1F2937;
-                border: 1px solid transparent;
-                border-radius: 6px;
+                background-color: #2b2b2b;
             }
             #MinimizeButton:hover {
-                background-color: #F3F4F6;
+                background-color: blue;
             }
             #CloseButton:hover {
-                background-color: #FF4D4F;
-                color: white;
-            }
-            QPushButton {
-                min-height: 36px;
-                border-radius: 9px;
-                border: 1px solid transparent;
-            }
-            QPushButton:hover {
-                padding-top: 1px;
-            }
-            QPushButton:pressed {
-                padding-top: 2px;
-            }
-            QComboBox, QSpinBox {
-                min-height: 34px;
-                border-radius: 8px;
-                border: 1px solid #E5E7EB;
-                background-color: #FFFFFF;
-                color: #1F2937;
-                padding: 0 10px;
-            }
-            QComboBox:hover, QComboBox:focus,
-            QSpinBox:hover, QSpinBox:focus {
-                border: 1px solid #2D8CF0;
-            }
-            QComboBox QAbstractItemView {
-                background-color: #FFFFFF;
-                color: #1F2937;
-                selection-background-color: #2D8CF0;
-                selection-color: white;
-                border: 1px solid #E5E7EB;
-                border-radius: 8px;
-                padding: 6px;
-            }
-            QCheckBox {
-                color: #1F2937;
-            }
-            QCheckBox::indicator {
-                width: 16px;
-                height: 16px;
-                border-radius: 5px;
-                border: 1px solid #E5E7EB;
-                background: #FFFFFF;
-            }
-            QCheckBox::indicator:checked {
-                background: #2D8CF0;
-                border: 1px solid #2D8CF0;
-            }
-            #CompareButton {
-                background-color: #2D8CF0;
-                color: white;
-                font: 700 15px 'Segoe UI', sans-serif;
-                border-radius: 10px;
-                padding: 10px 12px;
-            }
-            #CompareButton:hover {
-                background-color: #1E90FF;
-                padding-top: 9px;
+                background-color: red;
             }
         """
         )
@@ -1387,18 +1140,17 @@ def load_settings() -> dict:
 
 stylesheet = """
 #SettingsButton {
-    background-color: #EFF6FF;
-    color: #2D8CF0;
+    background-color: #ff5e0e;
+    color: black;
 }
 #MinimizeButton:hover {
-    background-color: #F3F4F6;
+    background-color: blue;
 }
 #CloseButton:hover {
-    background-color: #FF4D4F;
-    color: white;
+    background-color: red;
 }
 #SettingsDialog {
-    color: #1F2937;
+    color: black;
 }
 """
 

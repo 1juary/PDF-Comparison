@@ -1,113 +1,124 @@
-import fitz
-from pathlib import Path
-from PyInstaller.utils.hooks import collect_submodules
-from typing import List
+import re
+import sys
+from difflib import SequenceMatcher
+from json import dump, load
 from os import path
-from time import sleep
-from json import load, dump
 from tempfile import TemporaryDirectory
-from numpy import array, where, all, int32
-from PIL import Image, ImageChops, ImageDraw, ImageOps
-from cv2 import findContours, threshold, approxPolyDP, arcLength, contourArea, boundingRect, THRESH_BINARY, \
-    RETR_EXTERNAL, CHAIN_APPROX_SIMPLE
+from time import sleep
+from typing import Dict, List, Optional, Tuple
 
+import fitz
+from PIL import Image, ImageDraw
 from PySide6.QtCore import QThread, Signal, Slot, Qt
-from PySide6.QtWidgets import QMainWindow, QProgressBar, QApplication, QWidget, QVBoxLayout, QTextBrowser, QDialog, \
-    QFrame, QPushButton, QLabel, \
-    QSpinBox, QDoubleSpinBox, QComboBox, QCheckBox, QLineEdit, QGroupBox, QTabWidget, QStyleFactory, QFormLayout, \
-    QHBoxLayout, QSpacerItem, QSizePolicy, QFileDialog
 from PySide6.QtGui import QIcon
+from PySide6.QtWidgets import (
+    QApplication,
+    QCheckBox,
+    QComboBox,
+    QDialog,
+    QFileDialog,
+    QFormLayout,
+    QFrame,
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QMainWindow,
+    QProgressBar,
+    QPushButton,
+    QSizePolicy,
+    QSpacerItem,
+    QSpinBox,
+    QStyleFactory,
+    QTabWidget,
+    QTextBrowser,
+    QVBoxLayout,
+    QWidget,
+)
 
 
-class AdvancedSettings(QWidget):  #处理高级设置选项的GUI组件,继承自Qwidget
-    def __init__(self, parent=None): #唯一指定可选参数，parent，如果不传parent，窗口将作为独立窗口显示
-        super().__init__(parent)   #实现特定功能的自定义
-        self.settings = load_settings()     #自定义函数加载设置，应用逻辑需要，与QWidget 无关
+class AdvancedSettings(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.settings = load_settings()
 
-        self.threshold_label = QLabel("Threshold [Default: 128]:") #自定义UI控件，Qlabel实例，显示一个文本标签，用于说明旁边的 QSpinBox（数值输入框）的作用
-        self.threshold_desc = QLabel(
-            "To analyze the pdf, it must be thresholded (converted to pure black and white). The threshold setting controls the point at which pixels become white or black determined based upon grayscale color values of 0-255")
-        self.threshold_desc.setWordWrap(True) #启用文本自动换行
-        self.threshold_desc.setStyleSheet("color: black; font: 12px Arial, sans-serif;")
-        self.threshold_spinbox = QSpinBox(self)
-        self.threshold_spinbox.setMinimum(0)
-        self.threshold_spinbox.setMaximum(255)
-        self.threshold_spinbox.setValue(self.settings["THRESHOLD"])
-        self.threshold_spinbox.valueChanged.connect(self.update_threshold) #实现交互逻辑，valueChanged 信号会隐式传递一个整数参数（即 threshold）给 update_threshold
+        self.min_diff_label = QLabel("Minimum Diff Token Length [Default: 2]:")
+        self.min_diff_desc = QLabel(
+            "Short differences are usually noise in PDFs. Increase this value to suppress tiny token-level changes."
+        )
+        self.min_diff_desc.setWordWrap(True)
+        self.min_diff_desc.setStyleSheet("color: #6B7280; font: 12px 'Segoe UI', Arial, sans-serif;")
+        self.min_diff_spinbox = QSpinBox(self)
+        self.min_diff_spinbox.setMinimum(1)
+        self.min_diff_spinbox.setMaximum(20)
+        self.min_diff_spinbox.setValue(self.settings.get("TEXT_MIN_DIFF_LENGTH", 2))
+        self.min_diff_spinbox.valueChanged.connect(self.update_min_diff)
 
-        self.minimum_area_label = QLabel("Minimum Area [Default: 100]:")
-        self.minimum_area_desc = QLabel(
-            "When marking up the pdf, boxes are created to highlight major changes. The minimum area setting controls the minimum size the boxes can be which will ultimately control what becomes classfied as a significant change.")
-        self.minimum_area_desc.setWordWrap(True)
-        self.minimum_area_desc.setStyleSheet("color: black; font: 12px Arial, sans-serif;")
-        self.minimum_area_spinbox = QSpinBox(self)
-        self.minimum_area_spinbox.setMinimum(0)
-        self.minimum_area_spinbox.setMaximum(1000)
-        self.minimum_area_spinbox.setValue(self.settings["MIN_AREA"])
-        self.minimum_area_spinbox.valueChanged.connect(self.update_area)
+        self.normalize_checkbox = QCheckBox("Normalize Text (lowercase, trim punctuation)")
+        self.normalize_checkbox.setChecked(self.settings.get("NORMALIZE_TEXT", True))
+        self.normalize_checkbox.stateChanged.connect(self.update_normalize)
 
-        self.epsilon_label = QLabel("Precision [Default: 0.00]:")
-        self.epsilon_desc = QLabel(
-            "When marking up the pdf, outlines are created to show any change. The precision setting controls the maximum distance of the created contours around a change. Smaller values will have better precision and follow curves better and higher values will have more space between the contour and the change.")
-        self.epsilon_desc.setWordWrap(True)
-        self.epsilon_desc.setStyleSheet("color: black; font: 12px Arial, sans-serif;")
-        self.epsilon_spinbox = QDoubleSpinBox(self)
-        self.epsilon_spinbox.setMinimum(0.000)
-        self.epsilon_spinbox.setMaximum(1.000)
-        self.epsilon_spinbox.setSingleStep(0.001)
-        self.epsilon_spinbox.setValue(self.settings["EPSILON"])
-        self.epsilon_spinbox.valueChanged.connect(self.update_epsilon)
-
-        layout = QVBoxLayout()  
+        layout = QVBoxLayout()
         layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+        layout.addWidget(self.min_diff_label)
+        layout.addWidget(self.min_diff_desc)
+        layout.addWidget(self.min_diff_spinbox)
+        layout.addWidget(self.normalize_checkbox)
+        self.setLayout(layout)
 
-        layout.addWidget(self.epsilon_label)
-        layout.addWidget(self.epsilon_desc)
-        layout.addWidget(self.epsilon_spinbox)
-        layout.addWidget(self.minimum_area_label)
-        layout.addWidget(self.minimum_area_desc)
-        layout.addWidget(self.minimum_area_spinbox)
-        layout.addWidget(self.threshold_label)
-        layout.addWidget(self.threshold_desc)
-        layout.addWidget(self.threshold_spinbox)
-
-        self.setLayout(layout) #关键步骤，将具体布局设置到widget
-        #setStyleSheet， 美化操作
-        self.setStyleSheet('''   
+        self.setStyleSheet("""
             QLabel {
-                color: black;
-                font: 14px Arial, sans-serif;
+                color: #1A1A2E;
+                font: 14px "Segoe UI", Arial, sans-serif;
             }
-            QSpinBox, QDoubleSpinBox {
-                color: black;
-                font: 14px Arial, sans-serif;
+            QSpinBox {
+                color: #1A1A2E;
+                font: 14px "Segoe UI", Arial, sans-serif;
+                background-color: white;
+                border: 1px solid #E0E6ED;
+                border-radius: 6px;
+                padding: 4px;
             }
-        ''')
+            QSpinBox:focus {
+                border: 1px solid #2196F3;
+            }
+            QCheckBox {
+                color: #1A1A2E;
+                font: 14px "Segoe UI", Arial, sans-serif;
+            }
+            QCheckBox::indicator {
+                width: 18px;
+                height: 18px;
+                border-radius: 4px;
+                border: 2px solid #E0E6ED;
+            }
+            QCheckBox::indicator:checked {
+                background-color: #2196F3;
+                border: 2px solid #2196F3;
+            }
+        """)
 
-    def update_threshold(self, threshold):#更新阈值设置,valueChanged 默认接收当前spinBox改变的值，信号内部已经绑定了当前值，update_threshold 需要声明接收这个参数：
-        self.settings["THESHOLD"] = threshold
+    def update_min_diff(self, value):
+        self.settings["TEXT_MIN_DIFF_LENGTH"] = int(value)
         save_settings(self.settings)
 
-    def update_area(self, area): #更新最小区域设置
-        self.settings["MIN_AREA"] = area
-        save_settings(self.settings)
-
-    def update_epsilon(self, epsilon): #更新精度设置
-        self.settings["EPSILON"] = epsilon
+    def update_normalize(self, state):
+        self.settings["NORMALIZE_TEXT"] = state == 2
         save_settings(self.settings)
 
 
-class DPISettings(QWidget):  #处理DPI设置选项的GUI组件，六种DPI级别设置
+class DPISettings(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.parent_window = window
         self.settings = load_settings()
+
         self.low_draft_label = QLabel("Low DPI - Draft Quality:")
         self.low_draft_spinbox = QSpinBox(self)
         self.low_draft_spinbox.setMinimum(1)
         self.low_draft_spinbox.setMaximum(99)
-        self.low_draft_spinbox.setValue(self.settings["DPI_LEVELS"][0]) #初始化spinbox的值，从seting 文件中提取
-        self.low_draft_spinbox.valueChanged.connect(self.update_dpi_levels) #连接信号，spin做出修改之后，对setting 文件进行更新
+        self.low_draft_spinbox.setValue(self.settings["DPI_LEVELS"][0])
+        self.low_draft_spinbox.valueChanged.connect(self.update_dpi_levels)
 
         self.low_viewing_label = QLabel("Low DPI - Viewing Only:")
         self.low_viewing_spinbox = QSpinBox(self)
@@ -146,7 +157,6 @@ class DPISettings(QWidget):  #处理DPI设置选项的GUI组件，六种DPI级�
 
         layout = QVBoxLayout()
         layout.setAlignment(Qt.AlignmentFlag.AlignTop)
-
         layout.addWidget(self.low_draft_label)
         layout.addWidget(self.low_draft_spinbox)
         layout.addWidget(self.low_viewing_label)
@@ -159,39 +169,47 @@ class DPISettings(QWidget):  #处理DPI设置选项的GUI组件，六种DPI级�
         layout.addWidget(self.high_spinbox)
         layout.addWidget(self.max_label)
         layout.addWidget(self.max_spinbox)
-
         self.setLayout(layout)
-        self.setStyleSheet('''
+
+        self.setStyleSheet("""
             QLabel {
-                color: black;
-                font: 14px Arial, sans-serif;
+                color: #1A1A2E;
+                font: 14px "Segoe UI", Arial, sans-serif;
             }
             QSpinBox {
-                color: black;
-                font: 14px Arial, sans-serif;
+                color: #1A1A2E;
+                font: 14px "Segoe UI", Arial, sans-serif;
+                background-color: white;
+                border: 1px solid #E0E6ED;
+                border-radius: 6px;
+                padding: 4px;
             }
-            QComboBox {  #下拉选择框控件
+            QSpinBox:focus {
+                border: 1px solid #2196F3;
+            }
+            QComboBox {
                 height: 30px;
                 border-radius: 5px;
-                background-color: #454545;
-                selection-background-color: #ff5e0e;
-                color: white;
+                background-color: white;
+                border: 1px solid #E0E6ED;
+                color: #1A1A2E;
             }
             QComboBox QAbstractItemView {
                 padding: 10px;
-                background-color: #454545;
-                selection-background-color: #ff5e0e;
-                color: white;
+                background-color: white;
+                selection-background-color: #E3F2FD;
+                selection-color: #1565C0;
+                color: #1A1A2E;
             }
-        ''')
+        """)
 
-    def update_dpi_levels(self, new_dpi): #更新DPI级别设置，一个值，可能同时属于多个层级，需要更新所有相关层级的标签，如果互斥，会导致各个层级DPI的界面显示不一致
+    def update_dpi_levels(self, new_dpi):
         if new_dpi < 100:
             self.settings["DPI_LEVELS"][0] = new_dpi
-            self.settings["DPI_LABELS"][0] = f"Low DPI: Draft Quality [{new_dpi}]" #<100,草稿质量
+            self.settings["DPI_LABELS"][0] = f"Low DPI: Draft Quality [{new_dpi}]"
         elif new_dpi < 200:
             self.settings["DPI_LEVELS"][1] = new_dpi
-            self.settings["DPI_LABELS"][1] = f"Low DPI: Viewing Quality [{new_dpi}]" #<200,查看质量
+            self.settings["DPI_LABELS"][1] = f"Low DPI: Viewing Quality [{new_dpi}]"
         elif new_dpi < 600:
             self.settings["DPI_LEVELS"][2] = new_dpi
             self.settings["DPI_LABELS"][2] = f"Medium DPI: Printable [{new_dpi}]"
@@ -204,93 +222,85 @@ class DPISettings(QWidget):  #处理DPI设置选项的GUI组件，六种DPI级�
         else:
             self.settings["DPI_LEVELS"][5] = new_dpi
             self.settings["DPI_LABELS"][5] = f"Max DPI: High Memory [{new_dpi}]"
+
         self.parent_window.dpi_combo.clear()
         self.parent_window.dpi_combo.addItems(self.settings["DPI_LABELS"])
         self.parent_window.dpi_combo.setCurrentText(self.settings["DPI_LABELS"][3])
-        save_settings()
+        save_settings(self.settings)
 
 
-class OutputSettings(QWidget): #处理输出设置选项的GUI组件
+class OutputSettings(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.settings = load_settings()
         self.output_path_label = QLabel("Output Path:")
         self.output_path_combobox = QComboBox(self)
-        self.output_path_combobox.addItems(["Source Path", "Default Path", "Specified Path"])  #下拉框提供三种路径模式
-        if self.settings["OUTPUT_PATH"] == "\\": #输出到默认文件夹
+        self.output_path_combobox.addItems(["Source Path", "Default Path", "Specified Path"])
+        if self.settings["OUTPUT_PATH"] == "\\":
             self.output_path_combobox.setCurrentText("Default Path")
         elif self.settings["OUTPUT_PATH"] is None:
             self.output_path_combobox.setCurrentText("Source Path")
         else:
-            self.output_path_combobox.setCurrentText("Specified Path") #自定义路径
-        self.output_path_combobox.currentTextChanged.connect(self.set_output_path) #当下拉框选项变化时，调用set_output_path 更新配置
+            self.output_path_combobox.setCurrentText("Specified Path")
+        self.output_path_combobox.currentTextChanged.connect(self.set_output_path)
 
         self.specified_label = QLabel("Specified Path:")
-        self.specified_entry = QLineEdit(self) #用于输入自定义路径
-        self.specified_entry.setText( #仅当选中Specified Path时显示当前路径
-            self.settings["OUTPUT_PATH"] if self.output_path_combobox.currentText() == "Specified Path" else "")
-        self.specified_entry.textChanged.connect(self.set_output_path) #文本变化时更新配置
+        self.specified_entry = QLineEdit(self)
+        self.specified_entry.setText(
+            self.settings["OUTPUT_PATH"] if self.output_path_combobox.currentText() == "Specified Path" else ""
+        )
+        self.specified_entry.textChanged.connect(self.set_output_path)
 
-        self.checkbox_image1 = QCheckBox("New Copy") #勾选选项
-        if self.settings["INCLUDE_IMAGES"]["New Copy"] is True:
-            self.checkbox_image1.setChecked(True)
+        self.checkbox_image1 = QCheckBox("New Copy")
+        self.checkbox_image1.setChecked(self.settings["INCLUDE_IMAGES"]["New Copy"])
         self.checkbox_image2 = QCheckBox("Old Copy")
-        if self.settings["INCLUDE_IMAGES"]["Old Copy"] is True:
-            self.checkbox_image2.setChecked(True)
+        self.checkbox_image2.setChecked(self.settings["INCLUDE_IMAGES"]["Old Copy"])
         self.checkbox_image3 = QCheckBox("Markup")
-        if self.settings["INCLUDE_IMAGES"]["Markup"] is True:
-            self.checkbox_image3.setChecked(True)
+        self.checkbox_image3.setChecked(self.settings["INCLUDE_IMAGES"]["Markup"])
         self.checkbox_image4 = QCheckBox("Difference")
-        if self.settings["INCLUDE_IMAGES"]["Difference"] is True:
-            self.checkbox_image4.setChecked(True)
+        self.checkbox_image4.setChecked(self.settings["INCLUDE_IMAGES"]["Difference"])
         self.checkbox_image5 = QCheckBox("Overlay")
-        if self.settings["INCLUDE_IMAGES"]["Overlay"] is True:
-            self.checkbox_image5.setChecked(True)
+        self.checkbox_image5.setChecked(self.settings["INCLUDE_IMAGES"]["Overlay"])
 
-        #每个复选框绑定到 set_output_images
         self.checkbox_image1.stateChanged.connect(self.set_output_images)
         self.checkbox_image2.stateChanged.connect(self.set_output_images)
         self.checkbox_image3.stateChanged.connect(self.set_output_images)
         self.checkbox_image4.stateChanged.connect(self.set_output_images)
         self.checkbox_image5.stateChanged.connect(self.set_output_images)
 
-        #是否缩放页面
         self.scaling_checkbox = QCheckBox("Scale Pages")
         self.scaling_checkbox.setChecked(self.settings["SCALE_OUTPUT"])
         self.scaling_checkbox.stateChanged.connect(self.set_scaling)
-        #是否黑白输出
+
         self.bw_checkbox = QCheckBox("Black/White")
         self.bw_checkbox.setChecked(self.settings["OUTPUT_BW"])
         self.bw_checkbox.stateChanged.connect(self.set_bw)
-        #是否灰度输出
+
         self.gs_checkbox = QCheckBox("Grayscale")
         self.gs_checkbox.setChecked(self.settings["OUTPUT_GS"])
         self.gs_checkbox.stateChanged.connect(self.set_gs)
-        #是否减小文件大小
+
         self.reduce_checkbox = QCheckBox("Reduce Size")
         self.reduce_checkbox.setChecked(self.settings["REDUCE_FILESIZE"])
         self.reduce_checkbox.stateChanged.connect(self.set_reduced_filesize)
-        #主页面选择
+
         self.main_page_label = QLabel("Main Page:")
         self.main_page_combobox = QComboBox(self)
         self.main_page_combobox.addItems(["New Document", "Old Document"])
         self.main_page_combobox.setCurrentText(self.settings["MAIN_PAGE"])
         self.main_page_combobox.currentTextChanged.connect(self.set_main_page)
 
-        #用QGroupBox将相关控件分组（分组创建实例），提升界面可读性
         output_path_group = QGroupBox("Output Settings")
         include_images_group = QGroupBox("Files to include:")
         general_group = QGroupBox("General")
         checkboxes_group = QGroupBox()
         other_group = QGroupBox()
 
-        #输出路径部分使用 QFormLayout（标签+控件对齐）
         output_path_layout = QFormLayout()
         output_path_layout.addRow(self.output_path_label, self.output_path_combobox)
         output_path_layout.addRow(self.specified_label, self.specified_entry)
         output_path_group.setLayout(output_path_layout)
 
-        #文件类型复选框使用水平布局 QHBoxLayout
         include_images_layout = QHBoxLayout()
         include_images_layout.addWidget(self.checkbox_image1)
         include_images_layout.addWidget(self.checkbox_image2)
@@ -315,163 +325,204 @@ class OutputSettings(QWidget): #处理输出设置选项的GUI组件
         general_layout.addWidget(other_group)
         general_group.setLayout(general_layout)
 
-        #所有分组框垂直排列 (QVBoxLayout)
         main_layout = QVBoxLayout(self)
         main_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         main_layout.addWidget(output_path_group)
         main_layout.addWidget(include_images_group)
         main_layout.addWidget(general_group)
-
         self.setLayout(main_layout)
-        self.setStyleSheet('''
+
+        self.setStyleSheet("""
             QLabel {
-                color: black;
-                font: 14px Arial, sans-serif;
+                color: #1A1A2E;
+                font: 14px "Segoe UI", Arial, sans-serif;
             }
             QSpinBox {
-                color: black;
-                font: 14px Arial, sans-serif;
+                color: #1A1A2E;
+                font: 14px "Segoe UI", Arial, sans-serif;
+            }
+            QLineEdit {
+                color: #1A1A2E;
+                background-color: white;
+                border: 1px solid #E0E6ED;
+                border-radius: 6px;
+                padding: 6px;
+                font: 13px "Segoe UI", Arial, sans-serif;
+            }
+            QLineEdit:focus {
+                border: 1px solid #2196F3;
             }
             QComboBox {
-                height: 30px;
-                border-radius: 5px;
-                background-color: #454545;
-                selection-background-color: #ff5e0e;
-                color: white;
+                height: 32px;
+                border-radius: 8px;
+                background-color: white;
+                border: 1px solid #E0E6ED;
+                color: #1A1A2E;
+                padding: 4px 8px;
+                font: 13px "Segoe UI", Arial, sans-serif;
+            }
+            QComboBox:hover {
+                border: 1px solid #2196F3;
             }
             QComboBox QAbstractItemView {
-                padding: 10px;
-                background-color: #454545;
-                selection-background-color: #ff5e0e;
-                color: white;
-                font: 14px Arial, sans-serif;
+                padding: 6px;
+                background-color: white;
+                selection-background-color: #E3F2FD;
+                selection-color: #1565C0;
+                color: #1A1A2E;
+                font: 13px "Segoe UI", Arial, sans-serif;
+            }
+            QComboBox::drop-down {
+                border: none;
             }
             QCheckBox {
-                color: black;
-                font: 14px Arial, sans-serif;
-                
+                color: #1A1A2E;
+                font: 14px "Segoe UI", Arial, sans-serif;
             }
-        ''')
+            QCheckBox::indicator {
+                width: 18px;
+                height: 18px;
+                border-radius: 4px;
+                border: 2px solid #E0E6ED;
+            }
+            QCheckBox::indicator:checked {
+                background-color: #2196F3;
+                border: 2px solid #2196F3;
+            }
+            QGroupBox {
+                color: #1A1A2E;
+                font: bold 14px "Segoe UI", Arial, sans-serif;
+                border: 1px solid #E0E6ED;
+                border-radius: 8px;
+                margin-top: 8px;
+                padding-top: 12px;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 10px;
+                padding: 0 4px 0 4px;
+                color: #2196F3;
+            }
+        """)
 
-    def set_output_path(self, option):  #由信号传递的当前 QComboBox 选中项的文本（"Source Path"/"Default Path"/"Specified Path"）
+    def set_output_path(self, option):
         if option == "Source Path":
             self.settings["OUTPUT_PATH"] = None
         elif option == "Default Path":
-            self.settings["OUTPUT_PATH"] = "\\" #这里只是用'\\' 做占位符
+            self.settings["OUTPUT_PATH"] = "\\"
         else:
-            self.settings["OUTPUT_PATH"] = self.specified_entry.text()
-            self.settings["OUTPUT_PATH"].replace("\\", "\\\\") #将单反斜杠转义为双反斜杠，确保windows路径合规,为windows特化处理
-            self.settings["OUTPUT_PATH"] += "\\" #强制添加末尾分隔符（如将 "C:\output" 转为 "C:\\output\\"）
+            raw = self.specified_entry.text().strip()
+            if raw:
+                normalized = raw.replace("/", "\\")
+                if not normalized.endswith("\\"):
+                    normalized += "\\"
+                self.settings["OUTPUT_PATH"] = normalized
+            else:
+                self.settings["OUTPUT_PATH"] = None
 
         save_settings(self.settings)
 
-    def set_output_images(self, state):#设置包含哪些输出图像
+    def set_output_images(self, state):
         checkbox = self.sender()
-        if state == 2:
-            self.settings["INCLUDE_IMAGES"][checkbox.text()] = True
-        else:
-            self.settings["INCLUDE_IMAGES"][checkbox.text()] = False
+        self.settings["INCLUDE_IMAGES"][checkbox.text()] = state == 2
         save_settings(self.settings)
 
-    def set_scaling(self, state): #设置包含哪些输出图像
-        if state == 2:
-            self.settings["SCALE_OUTPUT"] = True
-        else:
-            self.settings["SCALE_OUTPUT"] = False
+    def set_scaling(self, state):
+        self.settings["SCALE_OUTPUT"] = state == 2
         save_settings(self.settings)
 
-    def set_bw(self, state): #设置是否黑白输出
-        if state == 2:
-            self.settings["OUTPUT_BW"] = True
-        else:
-            self.settings["OUTPUT_BW"] = False
+    def set_bw(self, state):
+        self.settings["OUTPUT_BW"] = state == 2
         save_settings(self.settings)
 
-    def set_gs(self, state): #设置是否灰度输出
-        if state == 2:
-            self.settings["OUTPUT_GS"] = True
-        else:
-            self.settings["OUTPUT_GS"] = False
+    def set_gs(self, state):
+        self.settings["OUTPUT_GS"] = state == 2
         save_settings(self.settings)
 
-    def set_reduced_filesize(self, state): #设置是否减小文件大小
-        if state == 2:
-            self.settings["REDUCE_FILESIZE"] = True
-        else:
-            self.settings["REDUCE_FILESIZE"] = False
+    def set_reduced_filesize(self, state):
+        self.settings["REDUCE_FILESIZE"] = state == 2
         save_settings(self.settings)
 
-    def set_main_page(self, page): #设置主页面
+    def set_main_page(self, page):
         self.settings["MAIN_PAGE"] = page
         save_settings(self.settings)
 
 
-class SettingsDialog(QDialog): #设置对话框，整合所有设置选项
+class SettingsDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Settings")
         self.setWindowModality(Qt.ApplicationModal)
-        self.setFixedSize(500, 500)
+        self.setFixedSize(520, 550)
 
         self.tab_widget = QTabWidget(self)
-
-        output_settings = OutputSettings()
-        dpi_settings = DPISettings()
-        advanced_settings = AdvancedSettings()
-
-        self.tab_widget.addTab(output_settings, "Output")
-        self.tab_widget.addTab(dpi_settings, "DPI")
-        self.tab_widget.addTab(advanced_settings, "Advanced")
+        self.tab_widget.addTab(OutputSettings(), "Output")
+        self.tab_widget.addTab(DPISettings(), "DPI")
+        self.tab_widget.addTab(AdvancedSettings(), "Advanced")
 
         layout = QVBoxLayout(self)
         layout.addWidget(self.tab_widget)
         self.setLayout(layout)
-        self.setStyleSheet('''
+
+        self.setStyleSheet("""
             QDialog {
-                color: black;
+                background-color: #FAFBFC;
+                color: #1A1A2E;
             }
-            
-            QLabel {
-                color: black;
+            QTabWidget::pane {
+                border: 1px solid #E0E6ED;
+                background: white;
+                border-radius: 8px;
             }
-            
-            QSpinBox, QDoubleSpinBox {
-                color: black;
+            QTabBar::tab {
+                background: #F0F4F8;
+                color: #6B7280;
+                padding: 10px 24px;
+                border-top-left-radius: 8px;
+                border-top-right-radius: 8px;
+                margin-right: 2px;
+                font: 13px "Segoe UI", Arial, sans-serif;
             }
-        ''')
+            QTabBar::tab:selected {
+                background: #2196F3;
+                color: white;
+                font-weight: bold;
+            }
+            QTabBar::tab:hover:!selected {
+                background: #E3F2FD;
+                color: #1565C0;
+            }
+        """)
 
 
-class CustomTitleBar(QFrame): #自定义标题栏，实现自定义窗口标题栏，替换原生窗口标题栏并提供自定义按钮和拖拽功能。基于 QFrame（而非 QWidget），便于边框样式控制
+class CustomTitleBar(QFrame):
     def __init__(self, parent):
         super().__init__(parent)
-        self.parent = parent #保存父窗口引用，便于后续操作（如最小化/关闭窗口）。
-        self.setFixedHeight(40) #固定标题栏高度为40像素（视觉统一）
-        self.layout = QHBoxLayout(self) #水平布局
-        self.layout.setContentsMargins(10, 0, 10, 0) #边距左右各10pixel，上下无间隔
-        self.layout.setAlignment(Qt.AlignmentFlag.AlignLeft) #默认左对齐（后续通过伸缩项实现左右分栏）
+        self.parent = parent
+        self.setFixedHeight(40)
+        self.layout = QHBoxLayout(self)
+        self.layout.setContentsMargins(10, 0, 10, 0)
+        self.layout.setAlignment(Qt.AlignmentFlag.AlignLeft)
 
-        #将标题文本推到中间，实现左右分栏布局
         spacer_item = QSpacerItem(20, 20, QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
 
-        self.title_label = QLabel("PyPDFCompare")  #主程序，显示应用程序名称
-        #设置按钮
+        self.title_label = QLabel("PDF Comparison Tool")
+        self.title_label.setStyleSheet("color: white; font: bold 14px 'Segoe UI', Arial, sans-serif;")
         self.settings_button = QPushButton("Settings", self)
-        self.settings_button.setObjectName('SettingsButton') #设置ObjectName，用于CSS样式定制
-        self.settings_button.setFixedSize(65, 25) #固定大小65X25像素
-        #和open_settings连接
+        self.settings_button.setObjectName("SettingsButton")
+        self.settings_button.setFixedSize(70, 28)
         self.settings_button.clicked.connect(self.open_settings)
-        #窗口最小化按钮
-        self.minimize_button = QPushButton("-", self)
-        self.minimize_button.setObjectName('MinimizeButton')
-        self.minimize_button.setFixedSize(20, 20)
-        self.minimize_button.clicked.connect(self.parent.showMinimized) #点击后最小化父窗口
-        #窗口关闭按钮
-        self.close_button = QPushButton("X", self)
-        self.close_button.setObjectName('CloseButton')
-        self.close_button.setFixedSize(20, 20)
-        self.close_button.clicked.connect(self.parent.close) #点击后关闭父窗口
 
-        #顺序 [设置按钮] + [伸缩项] + [标题] + [伸缩项] + [最小化按钮] + [关闭按钮]
+        self.minimize_button = QPushButton("−", self)
+        self.minimize_button.setObjectName("MinimizeButton")
+        self.minimize_button.setFixedSize(28, 28)
+        self.minimize_button.clicked.connect(self.parent.showMinimized)
+
+        self.close_button = QPushButton("✕", self)
+        self.close_button.setObjectName("CloseButton")
+        self.close_button.setFixedSize(28, 28)
+        self.close_button.clicked.connect(self.parent.close)
+
         self.layout.addWidget(self.settings_button)
         self.layout.addItem(spacer_item)
         self.layout.addWidget(self.title_label)
@@ -479,164 +530,245 @@ class CustomTitleBar(QFrame): #自定义标题栏，实现自定义窗口标题�
         self.layout.addWidget(self.minimize_button)
         self.layout.addWidget(self.close_button)
 
-        #拖拽功能实现
-        self.draggable = True #启用拖拽
-        self.dragging_threshold = 5 #防误触阈值，
-        self.drag_start_position = None #记录拖拽启示坐标
+        self.draggable = True
+        self.dragging_threshold = 5
+        self.drag_start_position = None
 
-    def mousePressEvent(self, event): #鼠标点击事件
-        if self.draggable:
-            if event.button() == Qt.LeftButton:
-                self.drag_start_position = event.globalPosition().toPoint() - self.parent.pos() #当左键按下时，计算鼠标相对于窗口的偏移量
-        event.accept() #保存该偏移量用于后续拖拽计算
-
-    def mouseMoveEvent(self, event):
-        if self.draggable and self.drag_start_position is not None:
-            if event.buttons() == Qt.LeftButton:
-                if (
-                        event.globalPosition().toPoint() - self.drag_start_position
-                ).manhattanLength() > self.dragging_threshold:  #manhattanLength() 计算移动距离（避免平方根开销），移动超过阈值
-                    self.parent.move(event.globalPosition().toPoint() - self.drag_start_position)   #超过阈值后，更新窗口位置为当前鼠标位置 - 初始偏移量
-                    self.drag_start_position = event.globalPosition().toPoint() - self.parent.pos() #实时更新drag_start_position,实现平滑拖拽
+    def mousePressEvent(self, event):
+        if self.draggable and event.button() == Qt.LeftButton:
+            self.drag_start_position = event.globalPosition().toPoint() - self.parent.pos()
         event.accept()
 
-    def mouseReleaseEvent(self, event):  #清除拖拽状态
+    def mouseMoveEvent(self, event):
+        if self.draggable and self.drag_start_position is not None and event.buttons() == Qt.LeftButton:
+            if (event.globalPosition().toPoint() - self.drag_start_position).manhattanLength() > self.dragging_threshold:
+                self.parent.move(event.globalPosition().toPoint() - self.drag_start_position)
+                self.drag_start_position = event.globalPosition().toPoint() - self.parent.pos()
+        event.accept()
+
+    def mouseReleaseEvent(self, event):
         if event.button() == Qt.LeftButton:
             self.drag_start_position = None
         event.accept()
 
     def open_settings(self):
         settings_dialog = SettingsDialog(self.parent)
-        settings_dialog.exec()  #exec() 阻塞主窗口直到对话框关闭
+        settings_dialog.exec()
 
 
-class DragDropLabel(QPushButton): #拖放区域组件，支持拖放PDF文件
-    def __init__(self, parent=None):
+class DragDropLabel(QPushButton):
+    def __init__(self, role, parent=None):
         super().__init__(parent)
-        self._parent = parent  #保存父窗口引用
-        self.setAcceptDrops(True) #启用拖放功能
-        sizePolicy = QSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding) #水平方向最小宽度，垂直方向可扩展
-        self.clicked.connect(self.browse_files) #点击按钮触发文件选择
-        self.setSizePolicy(sizePolicy)
-        self.setStyleSheet("""
-        QPushButton {
-                color: black;
-                background-color: #f7f7f7;
-                border-radius: 10px;
-                border: 2px solid #ff5e0e;
-            }
-        """)
-        self.setText("Drop files here or click to browse")
+        self._parent = parent
+        self.role = role  # "old" or "new"
+        self.file_path = None
+        self.setAcceptDrops(True)
+        size_policy = QSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding)
+        self.clicked.connect(self.browse_file)
+        self.setSizePolicy(size_policy)
+        self.setMinimumHeight(100)
+        self._update_style()
 
-    def browse_files(self) -> None: #打开文件对话框，限制选择PDF文件，可多选文件
-        files = list(QFileDialog.getOpenFileNames(self, "Open Files", "", "PDF Files (*.pdf)")[0])
-        if files and len(files) == 2:
-            self.setText(f"Main File: {files[0]}\nSecondary File: {files[1]}")
-            self._parent.files = files #将路径传递给主窗口
+    def _update_style(self):
+        if self.role == "old":
+            color = "#FF6B6B"
+            bg_color = "#FFF5F5"
+            bg_hover = "#FFE0E0"
+            label = "Drop OLD Version PDF here\nor click to browse"
+        else:
+            color = "#2196F3"
+            bg_color = "#F0F8FF"
+            bg_hover = "#E3F2FD"
+            label = "Drop NEW Version PDF here\nor click to browse"
+
+        if self.file_path:
+            label = f"{'OLD' if self.role == 'old' else 'NEW'}: {path.basename(self.file_path)}"
+
+        self.setText(label)
+        self.setStyleSheet(f"""
+        QPushButton {{
+            color: {color};
+            background-color: {bg_color};
+            border-radius: 12px;
+            border: 2px dashed {color};
+            font: bold 13px "Segoe UI", Arial, sans-serif;
+            padding: 8px;
+        }}
+        QPushButton:hover {{
+            background-color: {bg_hover};
+            border: 2px solid {color};
+        }}
+        """)
+
+    def browse_file(self):
+        file = QFileDialog.getOpenFileName(
+            self,
+            f"Open {'Old Version' if self.role == 'old' else 'New Version'} PDF",
+            "",
+            "PDF Files (*.pdf)"
+        )[0]
+        if file:
+            self.set_file(file)
 
     def dragEnterEvent(self, event):
-        if event.mimeData().hasUrls(): #检查拖拽内容是否包含文件路径
-            event.acceptProposedAction() #接收拖拽操作
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
 
     def dropEvent(self, event):
-        files = [url.toLocalFile() for url in event.mimeData().urls()] #获取文件路径
-        files.reverse()  #反转列表以保证顺序
-        if files and len(files) == 2:
-            self.setText(f"Main File: {files[0]}\nSecondary File: {files[1]}")
-            self._parent.files = files
+        urls = event.mimeData().urls()
+        if urls:
+            file_path = urls[0].toLocalFile()
+            if file_path.lower().endswith(".pdf"):
+                self.set_file(file_path)
+
+    def set_file(self, file_path):
+        self.file_path = file_path
+        if self._parent.files is None:
+            self._parent.files = [None, None]
+        if self.role == "new":
+            self._parent.files[0] = file_path
+        else:
+            self._parent.files[1] = file_path
+        self._update_style()
 
 
-class ProgressWindow(QMainWindow): #进度显示窗口
+class ProgressWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("PyPDFCompare")
         self.resize(600, 500)
 
-        self.centralWidget = QWidget()
-        self.setCentralWidget(self.centralWidget)
+        self.central_widget = QWidget()
+        self.setCentralWidget(self.central_widget)
         self.layout = QVBoxLayout()
 
-        self.progressBar = QProgressBar()
-        self.logArea = QTextBrowser()
-        self.logArea.setReadOnly(True)
+        self.progress_bar = QProgressBar()
+        self.log_area = QTextBrowser()
+        self.log_area.setReadOnly(True)
 
-        self.layout.addWidget(self.progressBar)
-        self.layout.addWidget(self.logArea)
+        self.layout.addWidget(self.progress_bar)
+        self.layout.addWidget(self.log_area)
+        self.central_widget.setLayout(self.layout)
 
-        self.centralWidget.setLayout(self.layout)
-
-        self.setStyleSheet("""
+        self.setStyleSheet(
+            """
             QMainWindow {
-                background-color: #2b2b2b;
+                background-color: #FAFBFC;
             }
             QTextBrowser {
-                background-color: #323232;
-                color: #c8c8c8;
-                border: 1px solid #ff5e0e;
-                border-radius: 5px;
+                background-color: white;
+                color: #1A1A2E;
+                border: 1px solid #E0E6ED;
+                border-radius: 8px;
+                font: 12px "Segoe UI", Arial, sans-serif;
+                padding: 8px;
             }
             QProgressBar {
-                border: 1px solid #ff5e0e;
-                border-radius: 5px;
+                border: 1px solid #E0E6ED;
+                border-radius: 8px;
                 text-align: center;
-                color: #c8c8c8;
-                background-color: #202020;
+                color: #1A1A2E;
+                background-color: #F0F4F8;
+                height: 20px;
+                font: 11px "Segoe UI", Arial, sans-serif;
             }
             QProgressBar::chunk {
-                background-color: #0075d5;
-                width: 1px;
-                border: 1px solid transparent;
-                border-radius: 5px;
+                background-color: #2196F3;
+                border-radius: 7px;
             }
-        """)
+        """
+        )
 
     @Slot(int)
-    def update_progress(self, progress): #跟新进度
-        self.progressBar.setValue(progress)
+    def update_progress(self, progress):
+        self.progress_bar.setValue(progress)
 
     @Slot(str)
-    def update_log(self, message): #更新日志
-        self.logArea.append(message)
+    def update_log(self, message):
+        self.log_area.append(message)
 
     @Slot(int)
-    def operation_complete(self, time): #操作完成处理
-        sleep(time)
+    def operation_complete(self, delay_seconds):
+        sleep(delay_seconds)
         self.close()
 
 
-class MainWindow(QMainWindow): #应用程序主窗口
+class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-
-        self.setWindowTitle("Maxfield Auto Markup")
-        self.setGeometry(100, 100, 500, 300)
-        self.setWindowIcon(QIcon("app_icon.png"))
+        self.setWindowTitle("PDF Comparison Tool")
+        self.setGeometry(100, 100, 550, 380)
+        self.setWindowIcon(QIcon(resource_path("icon.ico")))
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint)
-        #创建自定义标题栏实例
+
         self.title_bar = CustomTitleBar(self)
         self.title_bar.setObjectName("TitleBar")
         self.setMenuWidget(self.title_bar)
-        #加载用户配置到self.setting字典
+
         self.settings = load_settings()
         self.files = None
+        self.compare_thread: Optional["CompareThread"] = None
+        self.progress_window: Optional["ProgressWindow"] = None
 
         layout = QVBoxLayout()
-
-        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(10)
-        #创建支持拖放文件和点击浏览的交互区域
-        self.drop_label = DragDropLabel(self)
-        #点击时触发compare()方法启动文件比较
+
+        # Two-panel drag-and-drop: Old (left) / New (right)
+        drop_layout = QHBoxLayout()
+        self.drop_label_old = DragDropLabel("old", self)
+        self.drop_label_new = DragDropLabel("new", self)
+        drop_layout.addWidget(self.drop_label_old)
+        drop_layout.addWidget(self.drop_label_new)
+        layout.addLayout(drop_layout)
+
+        # Swap button
+        self.swap_button = QPushButton("⇅ Swap Old ⇄ New")
+        self.swap_button.setStyleSheet("""
+            QPushButton {
+                background-color: #E8F0FE;
+                color: #2196F3;
+                border: 1px solid #BBDEFB;
+                border-radius: 8px;
+                padding: 8px;
+                font: bold 12px "Segoe UI", Arial, sans-serif;
+            }
+            QPushButton:hover {
+                background-color: #BBDEFB;
+            }
+        """)
+        self.swap_button.clicked.connect(self.swap_files)
+        layout.addWidget(self.swap_button)
+
         self.compare_button = QPushButton("Compare", self)
+        self.compare_button.setStyleSheet("""
+            QPushButton {
+                background-color: #2196F3;
+                color: white;
+                border: none;
+                border-radius: 8px;
+                padding: 10px;
+                font: bold 14px "Segoe UI", Arial, sans-serif;
+            }
+            QPushButton:hover {
+                background-color: #1976D2;
+            }
+            QPushButton:pressed {
+                background-color: #1565C0;
+            }
+            QPushButton:disabled {
+                background-color: #BDBDBD;
+            }
+        """)
         self.compare_button.clicked.connect(self.compare)
-        #DPI 下拉框
+
         self.dpi_label = QLabel("DPI:", self)
         self.dpi_label.setAlignment(Qt.AlignmentFlag.AlignBottom)
         self.dpi_combo = QComboBox(self)
         self.dpi_combo.addItems(self.settings["DPI_LABELS"])
-        self.dpi_combo.setCurrentText(self.settings["DPI"])  #设置下拉框的当前选中项，要求参数与下拉框中的某一项的文本完全一致，这部分写在setting.json中
-        self.dpi_combo.currentTextChanged.connect(self.update_dpi) #当前选项变化时更新配置
-        #页面尺寸下拉框
+        self.dpi_combo.setCurrentText(self.settings["DPI"])
+        self.dpi_combo.currentTextChanged.connect(self.update_dpi)
+
         self.page_label = QLabel("Page Size:", self)
         self.page_label.setAlignment(Qt.AlignmentFlag.AlignBottom)
         self.page_combo = QComboBox(self)
@@ -644,380 +776,492 @@ class MainWindow(QMainWindow): #应用程序主窗口
         self.page_combo.setCurrentText(self.settings["PAGE_SIZE"])
         self.page_combo.currentTextChanged.connect(self.update_page_size)
 
-        layout.addWidget(self.drop_label)
         layout.addWidget(self.compare_button)
         layout.addWidget(self.dpi_label)
         layout.addWidget(self.dpi_combo)
         layout.addWidget(self.page_label)
         layout.addWidget(self.page_combo)
-        #布局管理
+
         central_widget = QWidget()
         central_widget.setLayout(layout)
         self.setCentralWidget(central_widget)
-
         self.set_stylesheet()
 
-    def set_stylesheet(self):  #设置界面样式
-        self.drop_label.setStyleSheet("""
-        QPushButton {
-            color: white;
-            background-color: #2D2D2D;
-            border-radius: 10px;
-            border: 2px solid #ff5e0e;
-            }""")
-
+    def set_stylesheet(self):
         self.setStyleSheet("""
             QLabel {
-                font: 14px Arial, sans-serif;
-                color: white;
+                font: 14px "Segoe UI", Arial, sans-serif;
+                color: #1A1A2E;
             }
             QMainWindow {
-                background-color: #2D2D2D;
+                background-color: #F0F4F8;
             }
             #TitleBar {
-                background-color: #1f1f1f;
+                background-color: #2196F3;
             }
             #SettingsButton {
-                background-color: #ff5e0e;
-                color: black;
+                background-color: #FFC107;
+                color: #1A1A2E;
+                border-radius: 6px;
+                font-weight: bold;
             }
             #MinimizeButton {
-                background-color: #2b2b2b;
+                background-color: transparent;
+                color: white;
+                font-weight: bold;
             }
             #CloseButton {
-                background-color: #2b2b2b;
+                background-color: transparent;
+                color: white;
+                font-weight: bold;
             }
             #MinimizeButton:hover {
-                background-color: blue;
+                background-color: rgba(255,255,255,0.2);
             }
             #CloseButton:hover {
-                background-color: red;
+                background-color: #FF5252;
+            }
+            QComboBox {
+                height: 32px;
+                border-radius: 8px;
+                background-color: white;
+                border: 1px solid #E0E6ED;
+                color: #1A1A2E;
+                padding: 4px 8px;
+                font: 13px "Segoe UI", Arial, sans-serif;
+            }
+            QComboBox:hover {
+                border: 1px solid #2196F3;
+            }
+            QComboBox QAbstractItemView {
+                padding: 6px;
+                background-color: white;
+                selection-background-color: #E3F2FD;
+                selection-color: #1565C0;
+                color: #1A1A2E;
+            }
+            QComboBox::drop-down {
+                border: none;
             }
         """)
 
-    #更新DPI配置
-    def update_dpi(self, dpi):  #更新DPI设置，dpi是由信号自动传递的当前选中项文本，"Standard DPI [600]"，类型是字符串
-        if dpi != "":
+    def swap_files(self):
+        if self.files and self.files[0] and self.files[1]:
+            self.files = [self.files[1], self.files[0]]
+            self.drop_label_old.file_path = self.files[1]
+            self.drop_label_new.file_path = self.files[0]
+            self.drop_label_old._update_style()
+            self.drop_label_new._update_style()
+
+    def update_dpi(self, dpi):
+        if dpi:
             self.settings["DPI"] = dpi
-            self.settings["DPI_LEVEL"] = self.settings["DPI_LEVELS"][self.settings["DPI_LABELS"].index(dpi)] #在DPI标签列表（如 ["Low DPI [75]", "Standard DPI [600]", ...]）中查找当前选项的索引位置
+            self.settings["DPI_LEVEL"] = self.settings["DPI_LEVELS"][self.settings["DPI_LABELS"].index(dpi)]
             save_settings(self.settings)
 
-    def update_page_size(self, page_size): #更新页面大小设置
-        self.settings["PAGE"] = page_size
-        self.settings["PAGE_SIZE"] = self.settings["PAGE_SIZES"][page_size]
+    def update_page_size(self, page_size):
+        self.settings["PAGE_SIZE"] = page_size
         save_settings(self.settings)
 
-    def compare(self): #启动比较操作
-        if self.files and len(self.files) == 2:
-            progress_window = ProgressWindow()
-            progress_window.show()
-            compare_thread = CompareThread(self.files, progress_window, self)
-            compare_thread.start()
+    def compare(self):
+        if self.files and len(self.files) == 2 and self.files[0] and self.files[1]:
+            self.progress_window = ProgressWindow()
+            self.progress_window.show()
+            self.compare_thread = CompareThread(self.files, self.progress_window, self)
+            self.compare_thread.finished.connect(self._thread_cleanup)
+            self.compare_thread.start()
+
+    def _thread_cleanup(self):
+        self.compare_thread = None
 
 
-class CompareThread(QThread): #比较线程，执行核心比较功能
-    progressUpdated = Signal(int) #定义信号，传递进度百分比，这个信号会携带一个整数参数
+class CompareThread(QThread):
+    progressUpdated = Signal(int)
     compareComplete = Signal(int)
     logMessage = Signal(str)
 
-    def __init__(self, files: List[str], progress_window: ProgressWindow, parent=None): #process_windows: ProcessWindow, 进程窗口类
-        super(CompareThread, self).__init__(parent) #调用父类的构造函数，等价于super().__init__(parent)
-        compare_settings = load_settings() #加载配置
-        self.DPI_LEVEL = compare_settings.get("DPI_LEVEL")
-        self.PAGE_SIZE = tuple(compare_settings.get("PAGE_SIZES").get(compare_settings.get("PAGE_SIZE")))
-        self.INCLUDE_IMAGES = compare_settings.get("INCLUDE_IMAGES")
-        self.MAIN_PAGE = compare_settings.get("MAIN_PAGE")
-        self.THRESHOLD = compare_settings.get("THRESHOLD")
-        self.MERGE_THRESHOLD = int(self.DPI_LEVEL / 100 * self.PAGE_SIZE[0] * self.PAGE_SIZE[1]) if self.PAGE_SIZE[0] and self.PAGE_SIZE[1] else None
-        self.MIN_AREA = compare_settings.get("MIN_AREA")
-        self.EPSILON = compare_settings.get("EPSILON")
+    def __init__(self, files: List[str], progress_window: ProgressWindow, parent=None):
+        super().__init__(parent)
+        compare_settings = load_settings()
+
+        self.DPI_LEVEL = compare_settings.get("DPI_LEVEL", 600)
+        self.PAGE_SIZE_NAME = compare_settings.get("PAGE_SIZE", "AUTO")
+        self.PAGE_SIZES = compare_settings.get("PAGE_SIZES", {})
+        self.PAGE_SIZE = tuple(self.PAGE_SIZES.get(self.PAGE_SIZE_NAME, [None, None]))
+        self.INCLUDE_IMAGES = compare_settings.get("INCLUDE_IMAGES", {})
+        self.MAIN_PAGE = compare_settings.get("MAIN_PAGE", "New Document")
         self.OUTPUT_PATH = compare_settings.get("OUTPUT_PATH")
-        self.SCALE_OUTPUT = compare_settings.get("SCALE_OUTPUT")
-        self.OUTPUT_BW = compare_settings.get("OUTPUT_BW")
-        self.OUTPUT_GS = compare_settings.get("OUTPUT_GS")
-        self.REDUCE_FILESIZE = compare_settings.get("REDUCE_FILESIZE")
+        self.SCALE_OUTPUT = compare_settings.get("SCALE_OUTPUT", True)
+        self.OUTPUT_BW = compare_settings.get("OUTPUT_BW", False)
+        self.OUTPUT_GS = compare_settings.get("OUTPUT_GS", False)
+        self.REDUCE_FILESIZE = compare_settings.get("REDUCE_FILESIZE", False)
+        self.TEXT_MIN_DIFF_LENGTH = int(compare_settings.get("TEXT_MIN_DIFF_LENGTH", 2))
+        self.NORMALIZE_TEXT = bool(compare_settings.get("NORMALIZE_TEXT", True))
+
         self.files = files
         self.progress_window = progress_window
         self.statistics = {
             "NUM_PAGES": 0,
             "MAIN_PAGE": None,
             "TOTAL_DIFFERENCES": 0,
-            "PAGES_WITH_DIFFERENCES": []
+            "PAGES_WITH_DIFFERENCES": [],
+            "ADDED_COUNT": 0,
+            "DELETED_COUNT": 0,
         }
 
         self.progressUpdated.connect(self.progress_window.update_progress)
         self.logMessage.connect(self.progress_window.update_log)
         self.compareComplete.connect(self.progress_window.operation_complete)
 
-    def run(self): #线程入口函数
+    def run(self):
         try:
             self.handle_files(self.files)
-        except fitz.fitz.FileDataError as e: #捕获文件数据错误异常
-            self.logMessage.emit(f"Error opening file: {e}") #发射日志信号
+        except fitz.fitz.FileDataError as error:
+            self.logMessage.emit(f"Error opening file: {error}")
+        except Exception as error:
+            self.logMessage.emit(f"Unhandled comparison error: {error}")
 
-    def mark_differences(self, page_num: int, image1: Image.Image, image2: Image.Image) -> List[Image.Image]: #标记差异函数
-        # Overlay Image
-        if self.INCLUDE_IMAGES["Overlay"] is True:
-            if image1.size != image2.size:
-                image2.size = image2.resize(image1.size)
-                self.logMessage.emit("Comparison",   #发射日志信号
-                                     "Page sizes don't match and the 'Scale Pages' setting is off, attempting to match page sizes... results may be inaccurate.")
-            image1array = array(image1)
-            image2array = array(image2)
-            image2array[~all(image2array == [255, 255, 255], axis=-1)] = [255, 0,0]  # Convert non-white pixels in image2array to red for overlay.
-            #image2array 是一个形状为 (height, width, 3) 的三维数组，最后一个维度是颜色通道，通常使用[R,G,B]的数据表示
-            #~取反，得到所有非白色像素的布尔索引。判断每个像素是否为白色，对每个像素的三个通道都判断，得到
-            overlay_image = Image.fromarray(
-                where(all(image1array == [255, 255, 255], axis=-1, keepdims=True), image2array, image1array)) #如果 image1array 的像素是白色，则取 image2array 的对应像素（已将非白色像素变为红色），否则保留imagearray的原像素
-            #all(..., axis=-1, keepdims=True) 会判断每个像素的三个通道是否都为 255（即该像素是白色），结果 shape 为 (height, width, 1)，每个像素只有一个布尔值，表示是否为白色。
-            del image1array, image2array 
+    def _normalize_text(self, text: str) -> str:
+        text = text.strip()
+        if self.NORMALIZE_TEXT:
+            text = text.lower()
+            text = re.sub(r"[\s\t\r\n]+", "", text)
+            text = re.sub(r"[\.,;:()\[\]{}<>\-_=+`~\"']+", "", text)
+        return text
 
-        # Markup Image / Differences Image
-        if self.INCLUDE_IMAGES["Markup"] is True or self.INCLUDE_IMAGES["Difference"] is True:
-            diff_image = Image.fromarray(where(all(array(
-                ImageOps.colorize(ImageOps.invert(ImageChops.subtract(image2, image1).convert("L")), black="blue",
-                                  white="white").convert("RGB")) == [255, 255, 255], axis=-1)[:, :, None], array(
-                ImageOps.colorize(ImageOps.invert(ImageChops.subtract(image1, image2).convert("L")), black="red",
-                                  white="white").convert("RGB")), array(
-                ImageOps.colorize(ImageOps.invert(ImageChops.subtract(image2, image1).convert("L")), black="blue",
-                                  white="white").convert("RGB"))))
-            if self.INCLUDE_IMAGES["Markup"] is True:
-                contours, _ = findContours(
-                    threshold(array(ImageChops.difference(image2, image1).convert("L")), self.THRESHOLD, 255,
-                              THRESH_BINARY)[1], RETR_EXTERNAL, CHAIN_APPROX_SIMPLE)
-                del _
-                marked_image = Image.new("RGBA", image1.size, (255, 0, 0, 255)) #创建一个红色背景的透明图层
-                marked_image.paste(image1, (0, 0)) #将原图粘贴到透明图层上
-                marked_image_draw = ImageDraw.Draw(marked_image) #创建一个可以在图像上绘图的对象
-                existing_boxes = []
+    def _extract_tokens(self, doc: fitz.Document) -> List[Dict]:
+        tokens = []
+        for page_num in range(doc.page_count):
+            page = doc.load_page(page_num)
+            words = page.get_text("words")
+            words.sort(key=lambda word: (word[5], word[6], word[7], word[1], word[0]))
+            for word in words:
+                raw = (word[4] or "").strip()
+                if not raw:
+                    continue
+                norm = self._normalize_text(raw)
+                if len(norm) < self.TEXT_MIN_DIFF_LENGTH:
+                    continue
+                tokens.append(
+                    {
+                        "text": raw,
+                        "norm": norm,
+                        "page": page_num,
+                        "rect": fitz.Rect(word[0], word[1], word[2], word[3]),
+                    }
+                )
+        return tokens
 
-                for contour in contours:
-                    approx = approxPolyDP(contour, (self.EPSILON + 0.0000000001) * arcLength(contour, False), False) #轮廓近似，多变拟合
-                    marked_image_draw.line(tuple(map(tuple, array(approx).reshape((-1, 2)).astype(int32))),
-                                           fill=(255, 0, 0, 255), width=int(self.DPI_LEVEL / 100)) #在图像上绘制轮廓线
+    @staticmethod
+    def _tokens_to_text(tokens: List[Dict], max_tokens: int = 18) -> str:
+        if not tokens:
+            return "无"
+        text = " ".join(token["text"] for token in tokens[:max_tokens]).strip()
+        if len(tokens) > max_tokens:
+            text += " ..."
+        return text
 
-                    if self.MIN_AREA < contourArea(contour):
-                        x, y, w, h = boundingRect(contour) #计算轮廓的边界框
-                        new_box = (x, y, x + w, y + h) #元组，分别表示左上角和右下角坐标
+    @staticmethod
+    def _group_rects_by_page(tokens: List[Dict]) -> Dict[int, List[fitz.Rect]]:
+        rect_map: Dict[int, List[fitz.Rect]] = {}
+        for token in tokens:
+            rect_map.setdefault(token["page"], []).append(token["rect"])
+        return rect_map
 
-                        #判断是否与现有框重叠，若重叠则合并
-                        merged = False
-                        for i, existing_box in enumerate(existing_boxes):
-                            # 定义重叠条件，这里使用简单的距离阈值判断
-                            if (max(new_box[0], existing_box[0]) - min(new_box[2],
-                                                                       existing_box[2]) <= self.MERGE_THRESHOLD and max(
-                                new_box[1], existing_box[1]) - min(new_box[3],
-                                                                   existing_box[3]) <= self.MERGE_THRESHOLD):
-                                #合并框，新框的左上角和右下角坐标取最小值和最大值
-                                merged_box = (min(new_box[0], existing_box[0]), min(new_box[1], existing_box[1]),
-                                              max(new_box[2], existing_box[2]), max(new_box[3], existing_box[3]))
-                                existing_boxes[i] = merged_box  # Update the existing box with the merged one
-                                merged = True
-                                break #跳出循环，避免重复合并，保证每个框只被合并一次
+    def _build_diff_entries(self, old_tokens: List[Dict], new_tokens: List[Dict]) -> List[Dict]:
+        old_norm = [token["norm"] for token in old_tokens]
+        new_norm = [token["norm"] for token in new_tokens]
+        matcher = SequenceMatcher(None, old_norm, new_norm, autojunk=False)
 
-                        if not merged:
-                            existing_boxes.append(new_box)
+        entries = []
+        for opcode, i1, i2, j1, j2 in matcher.get_opcodes():
+            if opcode == "equal":
+                continue
 
-                # After processing all contours, draw the boxes
-                for box in existing_boxes:
-                    diff_box = Image.new("RGBA", (box[2] - box[0], box[3] - box[1]), (0, 255, 0, 64))
-                    ImageDraw.Draw(diff_box).rectangle([(0, 0), (box[2] - box[0] - 1, box[3] - box[1] - 1)],
-                                                       outline=(255, 0, 0, 255), width=int(self.DPI_LEVEL / 100))
-                    marked_image.paste(diff_box, (box[0], box[1]), mask=diff_box) #将差异框粘贴到标记图像上，mask表示用diff_box的透明度信息作为掩码,只有diff_box不透明的部分才会覆盖marked_image 
-                del contours, marked_image_draw #释放内存
-                if len(existing_boxes):
-                    self.statistics["TOTAL_DIFFERENCES"] += len(existing_boxes)
-                    self.statistics["PAGES_WITH_DIFFERENCES"].append((page_num, len(existing_boxes)))
+            old_slice = old_tokens[i1:i2]
+            new_slice = new_tokens[j1:j2]
+            old_desc = self._tokens_to_text(old_slice)
+            new_desc = self._tokens_to_text(new_slice)
 
-        # Output
-        output = []
-        if not self.SCALE_OUTPUT:
-            if self.INCLUDE_IMAGES["New Copy"]:
-                output.append(image1.resize((int(self.PAGE_SIZE[0] * self.DPI_LEVEL), int(
-                    self.PAGE_SIZE[1] * self.DPI_LEVEL))) if self.MAIN_PAGE == "New Document" else image2.resize(
-                    (int(self.PAGE_SIZE[0] * self.DPI_LEVEL), int(self.PAGE_SIZE[1] * self.DPI_LEVEL))))
-            if self.INCLUDE_IMAGES["Old Copy"]:
-                output.append(image2.resize((int(self.PAGE_SIZE[0] * self.DPI_LEVEL), int(
-                    self.PAGE_SIZE[1] * self.DPI_LEVEL))) if self.MAIN_PAGE == "New Document" else image1.resize(
-                    (int(self.PAGE_SIZE[0] * self.DPI_LEVEL), int(self.PAGE_SIZE[1] * self.DPI_LEVEL))))
-            if self.INCLUDE_IMAGES["Markup"]:
-                output.append(marked_image.resize(
-                    (int(self.PAGE_SIZE[0] * self.DPI_LEVEL), int(self.PAGE_SIZE[1] * self.DPI_LEVEL))))
-            if self.INCLUDE_IMAGES["Difference"]:
-                output.append(diff_image.resize(
-                    (int(self.PAGE_SIZE[0] * self.DPI_LEVEL), int(self.PAGE_SIZE[1] * self.DPI_LEVEL))))
-            if self.INCLUDE_IMAGES["Overlay"]:
-                output.append(overlay_image.resize(
-                    (int(self.PAGE_SIZE[0] * self.DPI_LEVEL), int(self.PAGE_SIZE[1] * self.DPI_LEVEL))))
-        else:
-            if self.INCLUDE_IMAGES["New Copy"]:
-                output.append(image1 if self.MAIN_PAGE == "New Document" else image2)
-            if self.INCLUDE_IMAGES["Old Copy"]:
-                output.append(image2 if self.MAIN_PAGE == "New Document" else image1)
-            if self.INCLUDE_IMAGES["Markup"]:
-                output.append(marked_image)
-            if self.INCLUDE_IMAGES["Difference"]:
-                output.append(diff_image)
-            if self.INCLUDE_IMAGES["Overlay"]:
-                output.append(overlay_image)
-        return output
+            if old_desc == "无" and new_desc == "无":
+                continue
 
-    def pdf_to_image(self, page_number: int, doc: fitz.Document) -> Image.Image: #将PDF转换成图像
-        if page_number < doc.page_count:
-            pix = doc.load_page(page_number).get_pixmap(dpi=self.DPI_LEVEL)
+            entry_type = "replace" if opcode == "replace" else ("delete" if opcode == "delete" else "add")
+            old_rects = self._group_rects_by_page(old_slice)
+            new_rects = self._group_rects_by_page(new_slice)
+
+            entry = {
+                "type": entry_type,
+                "old_desc": old_desc,
+                "old_page": (old_slice[0]["page"] + 1) if old_slice else "无",
+                "new_desc": new_desc,
+                "new_page": (new_slice[0]["page"] + 1) if new_slice else "无",
+                "old_rects": old_rects,
+                "new_rects": new_rects,
+            }
+            entries.append(entry)
+
+        return entries
+
+    @staticmethod
+    def _render_page(doc: fitz.Document, page_index: int, dpi: int) -> Tuple[Image.Image, fitz.Rect]:
+        if page_index < doc.page_count:
+            page = doc.load_page(page_index)
+            pix = page.get_pixmap(dpi=dpi)
             image = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
-        else:
-            pix = doc.load_page(0).get_pixmap(dpi=self.DPI_LEVEL)
-            image = Image.new("RGB", (pix.width, pix.height), (255, 255, 255))
-        del pix
-        if self.SCALE_OUTPUT is True:
-            image = image.resize((int(self.PAGE_SIZE[0] * self.DPI_LEVEL), int(self.PAGE_SIZE[1] * self.DPI_LEVEL)))
+            return image, page.rect
+
+        first_page = doc.load_page(0)
+        pix = first_page.get_pixmap(dpi=dpi)
+        return Image.new("RGB", (pix.width, pix.height), (255, 255, 255)), first_page.rect
+
+    @staticmethod
+    def _draw_rectangles(image: Image.Image, page_rect: fitz.Rect, rects: List[fitz.Rect], color: Tuple[int, int, int]):
+        if not rects:
+            return image
+
+        draw = ImageDraw.Draw(image)
+        x_scale = image.width / max(page_rect.width, 1)
+        y_scale = image.height / max(page_rect.height, 1)
+        stroke = max(2, int(min(image.width, image.height) / 350))
+
+        for rect in rects:
+            x0 = max(0, int(rect.x0 * x_scale) - 2)
+            y0 = max(0, int(rect.y0 * y_scale) - 2)
+            x1 = min(image.width - 1, int(rect.x1 * x_scale) + 2)
+            y1 = min(image.height - 1, int(rect.y1 * y_scale) + 2)
+            draw.rectangle((x0, y0, x1, y1), outline=color, width=stroke)
+
         return image
 
-    def handle_files(self, files: List[str]) -> str: #处理文件比较流程
-        self.logMessage.emit(f"""Processing files:
-    {files[0]}
-    {files[1]}""")
-        toc = []
-        current_progress = 0
-        with fitz.open(files[0 if self.MAIN_PAGE == "New Document" else 1]) as doc1, fitz.open(
-                files[0 if self.MAIN_PAGE == "OLD" else 1]) as doc2:
-            size = doc1.load_page(0).rect
-            # If page size is auto, self.PAGESIZE will be none
-            if self.PAGE_SIZE[0] is None:
-                # Assume 72 DPI for original document resolution
-                self.PAGE_SIZE = (size.width / 72, size.height / 72)
-                self.MERGE_THRESHOLD = int(self.DPI_LEVEL / 120 * self.PAGE_SIZE[0] * self.PAGE_SIZE[1])
-            self.statistics["MAIN_PAGE"] = files[0 if self.MAIN_PAGE == "New Document" else 1]
-            filename = files[0 if self.MAIN_PAGE == "New Document" else 1].split("/")[-1]
-            source_path = False
-            if self.OUTPUT_PATH is None:
-                self.OUTPUT_PATH = files[0].replace(filename, "")
-                source_path = True
+    def _resize_if_needed(self, image: Image.Image) -> Image.Image:
+        if not self.SCALE_OUTPUT:
+            return image
 
-            total_operations = max(doc1.page_count, doc2.page_count)
-            self.logMessage.emit(f"Total pages {total_operations}.")
-            progress_per_operation = 100.0 / total_operations
+        if self.PAGE_SIZE[0] is None or self.PAGE_SIZE[1] is None:
+            return image
 
-            self.logMessage.emit("Creating temporary directory...")
+        return image.resize((int(self.PAGE_SIZE[0] * self.DPI_LEVEL), int(self.PAGE_SIZE[1] * self.DPI_LEVEL)))
+
+    @staticmethod
+    def _combine_side_by_side(left: Image.Image, right: Image.Image) -> Image.Image:
+        height = max(left.height, right.height)
+        width = left.width + right.width
+        merged = Image.new("RGB", (width, height), (255, 255, 255))
+        merged.paste(left, (0, 0))
+        merged.paste(right, (left.width, 0))
+        return merged
+
+    @staticmethod
+    def _overlay_blend(base: Image.Image, other: Image.Image) -> Image.Image:
+        other = other.resize(base.size)
+        return Image.blend(base, other, 0.5)
+
+    def _create_summary_pdf(self, temp_dir: str, diff_entries: List[Dict], old_file: str, new_file: str) -> str:
+        report_doc = fitz.open()
+        page = report_doc.new_page()
+        y = 72
+        line_height = 14
+        bottom_limit = fitz.paper_size("letter")[1] - 72
+
+        lines = [
+            "Document Comparison Report",
+            "",
+            f"Old Document: {old_file}",
+            f"New Document: {new_file}",
+            f"Total Differences: {self.statistics['TOTAL_DIFFERENCES']}",
+            f"Deleted Segments: {self.statistics['DELETED_COUNT']}",
+            f"Added Segments: {self.statistics['ADDED_COUNT']}",
+            "",
+            "Structured Diff Summary:",
+            "",
+        ]
+
+        for index, item in enumerate(diff_entries, start=1):
+            lines.append(f"[{index}] 原文档描述: {item['old_desc']}")
+            lines.append(f"    原文档页数: {item['old_page']}")
+            lines.append(f"    新文档描述: {item['new_desc']}")
+            lines.append(f"    新文档页数: {item['new_page']}")
+            lines.append("")
+
+        for line in lines:
+            if y > bottom_limit:
+                page = report_doc.new_page()
+                y = 72
+            page.insert_text((72, y), line, fontsize=10, fontname="helv")
+            y += line_height
+
+        report_file = path.join(temp_dir, "diff_summary.pdf")
+        report_doc.save(report_file)
+        report_doc.close()
+        return report_file
+
+    def _resolve_output_dir(self, source_file: str) -> str:
+        if self.OUTPUT_PATH is None:
+            return path.dirname(source_file)
+        if self.OUTPUT_PATH == "\\":
+            return path.dirname(source_file)
+        output_dir = self.OUTPUT_PATH.rstrip("\\/")
+        if path.isdir(output_dir):
+            return output_dir
+        return path.dirname(source_file)
+
+    def _apply_output_format(self, image: Image.Image) -> Image.Image:
+        if self.OUTPUT_GS:
+            image = image.convert("L")
+        elif self.OUTPUT_BW:
+            image = image.convert("1")
+        else:
+            image = image.convert("RGB")
+        return image
+
+    def handle_files(self, files: List[str]) -> str:
+        self.logMessage.emit(f"Processing files:\n    {files[0]}\n    {files[1]}")
+
+        if self.MAIN_PAGE == "New Document":
+            new_index, old_index = 0, 1
+            main_index = 0
+        else:
+            new_index, old_index = 1, 0
+            main_index = 1
+
+        with fitz.open(files[old_index]) as old_doc, fitz.open(files[new_index]) as new_doc:
+            self.statistics["MAIN_PAGE"] = files[main_index]
+            total_pages = max(old_doc.page_count, new_doc.page_count)
+            self.statistics["NUM_PAGES"] = total_pages
+
+            self.logMessage.emit("Extracting text tokens from old document...")
+            old_tokens = self._extract_tokens(old_doc)
+            self.progressUpdated.emit(10)
+
+            self.logMessage.emit("Extracting text tokens from new document...")
+            new_tokens = self._extract_tokens(new_doc)
+            self.progressUpdated.emit(20)
+
+            self.logMessage.emit("Running semantic text diff...")
+            diff_entries = self._build_diff_entries(old_tokens, new_tokens)
+
+            old_highlights: Dict[int, List[fitz.Rect]] = {}
+            new_highlights: Dict[int, List[fitz.Rect]] = {}
+            page_change_counts: Dict[int, int] = {}
+
+            for entry in diff_entries:
+                if entry["type"] in ("delete", "replace"):
+                    self.statistics["DELETED_COUNT"] += 1
+                    for page_idx, rects in entry["old_rects"].items():
+                        old_highlights.setdefault(page_idx, []).extend(rects)
+                        page_change_counts[page_idx + 1] = page_change_counts.get(page_idx + 1, 0) + len(rects)
+
+                if entry["type"] in ("add", "replace"):
+                    self.statistics["ADDED_COUNT"] += 1
+                    for page_idx, rects in entry["new_rects"].items():
+                        new_highlights.setdefault(page_idx, []).extend(rects)
+                        page_change_counts[page_idx + 1] = page_change_counts.get(page_idx + 1, 0) + len(rects)
+
+            self.statistics["TOTAL_DIFFERENCES"] = len(diff_entries)
+            self.statistics["PAGES_WITH_DIFFERENCES"] = sorted(page_change_counts.items(), key=lambda item: item[0])
+            self.logMessage.emit(f"Semantic diff complete. Found {len(diff_entries)} structured differences.")
+            self.progressUpdated.emit(30)
+
+            main_filename = path.basename(files[main_index])
+            output_dir = self._resolve_output_dir(files[main_index])
+            progress_per_page = 60.0 / max(total_pages, 1)
+            current_progress = 30.0
+            toc = []
+
             with TemporaryDirectory() as temp_dir:
-                self.logMessage.emit(f"Temporary directory created: {temp_dir}")
-                image_files = []
-                stats_filename = path.join(temp_dir, "stats.pdf")
-                image_files.append(stats_filename)
+                page_artifacts = []
 
-                for i in range(total_operations):
-                    self.logMessage.emit(f"Processing page {i + 1} of {total_operations}...")
-                    self.logMessage.emit(f"Converting main page...")
-                    image1 = self.pdf_to_image(i, doc1)
-                    self.logMessage.emit(f"Converting secondary page...")
-                    image2 = self.pdf_to_image(i, doc2)
-                    self.logMessage.emit(f"Marking differences...")
-                    markups = self.mark_differences(i, image1, image2)
-                    del image1, image2
+                for page_index in range(total_pages):
+                    self.logMessage.emit(f"Rendering page {page_index + 1} / {total_pages}...")
+                    old_base, old_page_rect = self._render_page(old_doc, page_index, self.DPI_LEVEL)
+                    new_base, new_page_rect = self._render_page(new_doc, page_index, self.DPI_LEVEL)
 
-                    # Save marked images and prepare TOC entries
-                    self.logMessage.emit(f"Saving output files...")
-                    for j, image in enumerate(markups):
-                        if self.OUTPUT_GS is True:
-                            image = image.convert("L")
-                        if self.OUTPUT_BW is True:
-                            image = image.convert("1")
-                        else:
-                            image = image.convert("RGB")
-                        image_file = path.join(temp_dir, f"{i}_{j}.pdf")
-                        image.save(image_file, resolution=self.DPI_LEVEL, author="MAXFIELD",
-                                   optimize=self.REDUCE_FILESIZE)
-                        del image
-                        image_files.append(image_file)
-                        toc.append([1, f"Page {i + 1} Variation {j + 1}", i * len(markups) + j])
+                    old_marked = self._draw_rectangles(old_base.copy(), old_page_rect, old_highlights.get(page_index, []), (220, 38, 38))
+                    new_marked = self._draw_rectangles(new_base.copy(), new_page_rect, new_highlights.get(page_index, []), (22, 163, 74))
 
-                    current_progress += progress_per_operation
+                    output_images = []
+                    if self.INCLUDE_IMAGES.get("New Copy", False):
+                        output_images.append(("New Copy", self._resize_if_needed(new_marked)))
+                    if self.INCLUDE_IMAGES.get("Old Copy", False):
+                        output_images.append(("Old Copy", self._resize_if_needed(old_marked)))
+                    if self.INCLUDE_IMAGES.get("Markup", True):
+                        output_images.append(
+                            (
+                                "Markup",
+                                self._resize_if_needed(new_marked if self.MAIN_PAGE == "New Document" else old_marked),
+                            )
+                        )
+                    if self.INCLUDE_IMAGES.get("Difference", False):
+                        output_images.append(("Difference", self._combine_side_by_side(old_marked, new_marked)))
+                    if self.INCLUDE_IMAGES.get("Overlay", False):
+                        output_images.append(("Overlay", self._overlay_blend(old_marked, new_marked)))
+
+                    if not output_images:
+                        output_images.append(("Markup", self._resize_if_needed(new_marked if self.MAIN_PAGE == "New Document" else old_marked)))
+
+                    for variant_index, (label, image) in enumerate(output_images):
+                        image = self._apply_output_format(image)
+                        image_file = path.join(temp_dir, f"{page_index}_{variant_index}.pdf")
+                        image.save(image_file, resolution=self.DPI_LEVEL, author="MAXFIELD", optimize=self.REDUCE_FILESIZE)
+                        page_artifacts.append(image_file)
+                        toc.append([1, f"Page {page_index + 1} {label}", len(page_artifacts)])
+
+                    current_progress += progress_per_page
                     self.progressUpdated.emit(int(current_progress))
 
-                # Create statistics page
-                text = f"Document Comparison Report\n\nTotal Pages: {total_operations}\nFiles Compared:\n    File in Blue_{files[0]}\n    File in Red_{files[1]}\nMain Page: {self.statistics['MAIN_PAGE']}\nTotal Differences: {self.statistics['TOTAL_DIFFERENCES']}\nPages with differences:\n"
-                for page_info in self.statistics["PAGES_WITH_DIFFERENCES"]:
-                    text += f"    Page {page_info[0] + 1} Changes: {page_info[1]}\n"
+                self.logMessage.emit("Generating structured diff report page...")
+                report_file = self._create_summary_pdf(temp_dir, diff_entries, files[old_index], files[new_index])
+                page_artifacts.append(report_file)
+                toc.append([1, "Structured Diff Summary", len(page_artifacts)])
 
-                # Create statistics page and handle text overflow
-                stats_doc = fitz.open()
-                stats_page = stats_doc.new_page()
-                text_blocks = text.split('\n')
-                y_position = 72
-                for line in text_blocks:
-                    if y_position > fitz.paper_size('letter')[1] - 72:
-                        stats_page = stats_doc.new_page()  # Create a new page if needed
-                        y_position = 72  # Reset y position for the new page
-                    stats_page.insert_text((72, y_position), line, fontsize=11, fontname="helv")
-                    y_position += 12  # Adjust y_position by the line height
-
-                # Save and close the stats document
-                stats_filename = path.join(temp_dir, "stats.pdf")
-                stats_doc.save(stats_filename)
-                stats_doc.close()
-
-                # Builds final PDF from each PDF image page
-                self.logMessage.emit("Compiling PDF from output folder...")
+                self.logMessage.emit("Compiling output PDF...")
                 compiled_pdf = fitz.open()
-                for img_path in image_files:
-                    img = fitz.open(img_path)
-                    compiled_pdf.insert_pdf(img, links=False)
-                    img.close()
+                for pdf_file in page_artifacts:
+                    part = fitz.open(pdf_file)
+                    compiled_pdf.insert_pdf(part, links=False)
+                    part.close()
 
-                # Update the table of contents
                 compiled_pdf.set_toc(toc)
-
-                # Save Final PDF File
-                self.logMessage.emit(f"Saving final PDF...")
-                output_path = f"{self.OUTPUT_PATH}{filename.split('.')[0]} Comparison.pdf"
+                output_path = path.join(output_dir, f"{path.splitext(main_filename)[0]} Comparison.pdf")
                 output_iterator = 0
-
-                # Checks if a version alreaday exists and increments revision if necessary
                 while path.exists(output_path):
                     output_iterator += 1
-                    output_path = f"{self.OUTPUT_PATH}{filename.split('.')[0]} Comparison Rev {output_iterator}.pdf"
+                    output_path = path.join(
+                        output_dir,
+                        f"{path.splitext(main_filename)[0]} Comparison Rev {output_iterator}.pdf",
+                    )
+
                 compiled_pdf.save(output_path)
                 compiled_pdf.close()
 
-                self.logMessage.emit(f"Comparison file created: {output_path}")
-                if source_path:
-                    self.OUTPUT_PATH = None
-
-        self.compareComplete.emit(5)
+        self.progressUpdated.emit(100)
+        self.logMessage.emit(f"Comparison file created: {output_path}")
+        self.compareComplete.emit(2)
         return output_path
 
 
-def save_settings(settings: dict) -> None: #保存设置到JSON文件
+def save_settings(settings: dict) -> None:
     settings_path = "settings.json"
-
-    if settings_path:
-        with open(settings_path, "w") as f:
-            dump(settings, f, indent=4)
+    with open(settings_path, "w", encoding="utf-8") as file:
+        dump(settings, file, indent=4)
 
 
-def load_settings() -> dict: #从JSON文件加载设置
-    settings = None
-    settings_path = "settings.json"
-
-    if settings_path and path.exists(settings_path):
-        with open(settings_path, "r") as f:
-            settings = load(f)
-    if not settings:
-        settings = _load_default_settings()
-    save_settings(settings)
-    return settings
+def resource_path(relative_path: str) -> str:
+    if hasattr(sys, "_MEIPASS"):
+        return path.join(sys._MEIPASS, relative_path)
+    return path.join(path.dirname(path.abspath(__file__)), relative_path)
 
 
-def _load_default_settings() -> dict: #加载默认设置
-    default_settings = {
+def _load_default_settings() -> dict:
+    return {
         "PAGE_SIZES": {
             "AUTO": [None, None],
             "LETTER": [8.5, 11],
             "ANSI A": [11, 8.5],
             "ANSI B": [17, 11],
             "ANSI C": [22, 17],
-            "ANSI D": [34, 22]
+            "ANSI D": [34, 22],
         },
         "DPI_LEVELS": [75, 150, 300, 600, 1200, 1800],
         "DPI_LABELS": [
@@ -1026,40 +1270,92 @@ def _load_default_settings() -> dict: #加载默认设置
             "Medium DPI: Printable [300]",
             "Standard DPI [600]",
             "High DPI [1200]: Professional Quality",
-            "Max DPI [1800]: Large File Size"
+            "Max DPI [1800]: Large File Size",
         ],
-        "INCLUDE_IMAGES": {"New Copy": False, "Old Copy": False, "Markup": True, "Difference": True, "Overlay": True},
+        "INCLUDE_IMAGES": {
+            "New Copy": True,
+            "Old Copy": True,
+            "Markup": True,
+            "Difference": False,
+            "Overlay": False,
+        },
         "DPI": "Standard DPI [600]",
         "DPI_LEVEL": 600,
         "PAGE_SIZE": "AUTO",
         "THRESHOLD": 128,
         "MIN_AREA": 100,
         "EPSILON": 0.0,
+        "TEXT_MIN_DIFF_LENGTH": 2,
+        "NORMALIZE_TEXT": True,
         "OUTPUT_PATH": None,
         "SCALE_OUTPUT": True,
         "OUTPUT_BW": False,
         "OUTPUT_GS": False,
-        "REDUCE_FILESIZE": True,
-        "MAIN_PAGE": "New Document"
+        "REDUCE_FILESIZE": False,
+        "MAIN_PAGE": "New Document",
     }
-    return default_settings
+
+
+def _normalize_settings(settings: dict) -> dict:
+    defaults = _load_default_settings()
+
+    for key, value in defaults.items():
+        if key not in settings:
+            settings[key] = value
+            continue
+
+        if isinstance(value, dict) and isinstance(settings[key], dict):
+            for child_key, child_default in value.items():
+                settings[key].setdefault(child_key, child_default)
+
+    if isinstance(settings.get("PAGE_SIZE"), list):
+        page_size_list = settings["PAGE_SIZE"]
+        matched = "AUTO"
+        for name, size in settings["PAGE_SIZES"].items():
+            if list(size) == list(page_size_list):
+                matched = name
+                break
+        settings["PAGE_SIZE"] = matched
+
+    if settings.get("PAGE_SIZE") not in settings.get("PAGE_SIZES", {}):
+        settings["PAGE_SIZE"] = "AUTO"
+
+    return settings
+
+
+def load_settings() -> dict:
+    settings_path = "settings.json"
+    settings = None
+    if path.exists(settings_path):
+        with open(settings_path, "r", encoding="utf-8") as file:
+            settings = load(file)
+
+    if not settings:
+        settings = _load_default_settings()
+
+    settings = _normalize_settings(settings)
+    save_settings(settings)
+    return settings
 
 
 stylesheet = """
 #SettingsButton {
-    background-color: #ff5e0e;
-    color: black;
+    background-color: #FFC107;
+    color: #1A1A2E;
+    border-radius: 6px;
+    font-weight: bold;
+}
+#SettingsButton:hover {
+    background-color: #FFB300;
 }
 #MinimizeButton:hover {
-    background-color: blue;
+    background-color: rgba(255,255,255,0.2);
 }
 #CloseButton:hover {
-    background-color: red;
-}
-#SettingsDialog {
-    color: black;
+    background-color: #FF5252;
 }
 """
+
 
 if __name__ == "__main__":
     app = QApplication([])

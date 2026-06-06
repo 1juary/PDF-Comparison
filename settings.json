@@ -63,5 +63,9 @@
     "SEMANTIC_ENABLED": true,
     "SEMANTIC_GRANULARITY": "Precise",
     "TEXT_MIN_DIFF_LENGTH": 2,
-    "NORMALIZE_TEXT": true
+    "NORMALIZE_TEXT": true,
+    "FORCE_OCR": false,
+    "VECTOR_BOX_PADDING": 2,
+    "OCR_BOX_PADDING": 1,
+    "OCR_MERGE_DIST_H": 12
 }

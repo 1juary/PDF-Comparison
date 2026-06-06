@@ -1020,19 +1020,25 @@ class CompareThread(QThread):
         if not rects:
             return image
 
-        draw = ImageDraw.Draw(image)
         x_scale = image.width / max(page_rect.width, 1)
         y_scale = image.height / max(page_rect.height, 1)
-        stroke = max(2, int(min(image.width, image.height) / 350))
+        stroke = max(1, int(min(image.width, image.height) / 800))
+
+        overlay = Image.new("RGBA", image.size, (0, 0, 0, 0))
+        overlay_draw = ImageDraw.Draw(overlay)
+        fill_color = (*color, 50)
+        outline_color = (*color, 160)
 
         for rect in rects:
             x0 = max(0, int(rect.x0 * x_scale) - 2)
             y0 = max(0, int(rect.y0 * y_scale) - 2)
             x1 = min(image.width - 1, int(rect.x1 * x_scale) + 2)
             y1 = min(image.height - 1, int(rect.y1 * y_scale) + 2)
-            draw.rectangle((x0, y0, x1, y1), outline=color, width=stroke)
+            overlay_draw.rectangle((x0, y0, x1, y1), fill=fill_color, outline=outline_color, width=stroke)
 
-        return image
+        image_rgba = image.convert("RGBA")
+        composited = Image.alpha_composite(image_rgba, overlay)
+        return composited.convert("RGB")
 
     def _resize_if_needed(self, image: Image.Image) -> Image.Image:
         if not self.SCALE_OUTPUT:

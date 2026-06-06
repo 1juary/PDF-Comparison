@@ -67,5 +67,5 @@
     "FORCE_OCR": false,
     "VECTOR_BOX_PADDING": 2,
     "OCR_BOX_PADDING": 1,
-    "OCR_MERGE_DIST_H": 12
+    "OCR_MERGE_DIST_H": 5
 }
